@@ -1,0 +1,19 @@
+{
+  "model_id": "monkt/paddleocr-onnx",
+  "source_url": "https://huggingface.co/monkt/paddleocr-onnx",
+  "language_group": "Chinese/Japanese",
+  "license": "Apache-2.0",
+  "intended_use": "Short handwritten or printed Japanese text recognition on web clients.",
+  "notes": [
+    "Upstream README states this language group covers Chinese and Japanese.",
+    "PaddleOCR PP-OCRv5 model cards state Japanese, handwriting, vertical text, and rare-character support.",
+    "This download is a pre-converted ONNX model from monkt/paddleocr-onnx."
+  ],
+  "files": {
+    "rec.onnx": "26fa4f47060f58e25962b9af6beaee05c8182b90e026c4ecc6db165d9dfdc38a",
+    "dict.txt": "d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b",
+    "config.json": "12cb91770e4da0ded935c97f47dc758bef56e5461be24b0b43fc0e4d5dea3878",
+    "UPSTREAM_README.md": "783815b2d4127bbdf2847fac50d4dfa3b4ec58508324e43a7b41de66994f6611",
+    "LICENSE-APACHE-2.0.txt": "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+  }
+}

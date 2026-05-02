@@ -1,0 +1,20 @@
+name: Notify Showcase
+
+on:
+    push:
+        branches: [main]
+
+jobs:
+    notify-parent:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Dispatch event to bio
+              uses: peter-evans/repository-dispatch@v3
+              with:
+                  token: ${{ secrets.BIO_DISPATCH_TOKEN }}
+                  repository: hi2ma-bu4/bio
+                  event-type: child_updated
+                  client-payload: |
+                      {
+                        "child": "${{ github.event.repository.name }}"
+                      }
