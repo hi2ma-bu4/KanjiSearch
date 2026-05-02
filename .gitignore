@@ -1,0 +1,5 @@
+**/node_modules/**
+**/._memo/**
+
+.DS_Store
+*.log
