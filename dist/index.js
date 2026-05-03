@@ -917,39 +917,21 @@ var HandwriteSearchApp = class {
   }
   buildLayout() {
     const header = section("app-header");
-    header.append(
-      heading("app-title", "\u3066\u304C\u304D\u3067 \u3057\u3089\u3079\u308B"),
-      paragraph("app-lead", "\u304A\u304A\u304D\u304F 1\u301C4\u3082\u3058 \u304F\u3089\u3044 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002\u304B\u306A \u3082 \u6F22\u5B57 \u3082 \u3088\u3081\u308B\u3088\u3046\u306B\u3057\u3066\u3044\u307E\u3059\u3002"),
-      this.buildSteps(),
-      this.buildStatus()
-    );
+    header.append(heading("app-title", "\u6F22\u5B57\u624B\u66F8\u304D\u691C\u7D22\u30C4\u30FC\u30EB"), paragraph("app-lead", "1\u301C4\u6587\u5B57\u7A0B\u5EA6\u3067\u66F8\u3044\u3066\u304F\u3060\u3055\u3044\u3002\u3072\u3089\u304C\u306A\u3001\u30AB\u30BF\u30AB\u30CA\u3001\u6F22\u5B57\u306B\u5BFE\u5FDC\u3057\u3066\u3044\u307E\u3059\u3002"), this.buildStatus());
     const layout = div("app-layout");
     layout.append(this.buildCanvasPanel(), this.buildResultPanel());
     this.root.append(header, layout);
   }
-  buildSteps() {
-    const steps = div("steps");
-    steps.append(
-      stepCard("1", "\u3053\u3053\u306B \u304B\u304F", "\u3086\u3063\u304F\u308A \u304A\u304A\u304D\u304F \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002"),
-      stepCard("2", "\u3088\u307F\u3068\u308B", "\u30DC\u30BF\u30F3\u3092 \u304A\u3059\u3068 \u3057\u3063\u304B\u308A \u305F\u3057\u304B\u3081\u307E\u3059\u3002"),
-      stepCard("3", "\u3048\u3089\u3076", "\u3061\u304C\u3046\u3068\u304D\u306F\u300C\u3082\u3057\u304B\u3057\u3066\u300D\u3092 \u3048\u3089\u3079\u307E\u3059\u3002")
-    );
-    return steps;
-  }
   buildStatus() {
     const status = div("status-box");
     this.statusLabel.className = "status-text";
-    this.statusLabel.textContent = "\u3058\u3085\u3093\u3073\u3057\u3066\u3044\u307E\u3059\u2026";
+    this.statusLabel.textContent = "\u8D77\u52D5\u5931\u6557";
     status.append(this.statusLabel);
     return status;
   }
   buildCanvasPanel() {
     const panel = div("card");
-    panel.append(
-      panelHeading("\u304B\u304F \u3068\u3053\u308D", "\u307E\u3093\u306A\u304B\u306B 1\u301C4\u3082\u3058 \u304F\u3089\u3044 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002"),
-      this.buildCanvasFrame(),
-      actionsRow(this.recognizeButton, this.clearButton)
-    );
+    panel.append(panelHeading("\u8A18\u5165\u6B04", "1\u301C4\u6587\u5B57\u7A0B\u5EA6\u3067\u66F8\u3044\u3066\u304F\u3060\u3055\u3044\u3002"), this.buildCanvasFrame(), actionsRow(this.recognizeButton, this.clearButton));
     return panel;
   }
   buildCanvasFrame() {
@@ -961,32 +943,19 @@ var HandwriteSearchApp = class {
   buildResultPanel() {
     const panel = div("card result-card");
     const previewCard = div("result-box result-box-preview");
-    previewCard.append(
-      label("box-label", "\u3044\u307E\u306E \u3088\u305D\u3046"),
-      this.previewText,
-      this.previewMeta
-    );
+    previewCard.append(label("box-label", "\u73FE\u5728\u306E\u4E88\u60F3"), this.previewText, this.previewMeta);
     this.previewText.className = "result-text result-text-preview";
-    this.previewText.textContent = "\u307E\u3060 \u307F\u3066\u3044\u307E\u305B\u3093\u3002";
+    this.previewText.textContent = "[\u672A\u8A18\u5165]";
     this.previewMeta.className = "result-note";
-    this.previewMeta.textContent = "\u304B\u304D\u306F\u3058\u3081\u308B\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
+    this.previewMeta.textContent = "";
     const finalCard = div("result-box");
-    finalCard.append(
-      label("box-label", "\u3051\u3063\u304B"),
-      this.resultText,
-      this.resultMeta,
-      this.suggestionList
-    );
+    finalCard.append(label("box-label", "\u7D50\u679C"), this.resultText, this.resultMeta, this.suggestionList);
     this.resultText.className = "result-text";
-    this.resultText.textContent = "\u307E\u3060 \u3088\u3093\u3067\u3044\u307E\u305B\u3093\u3002";
+    this.resultText.textContent = "[\u672A\u691C\u51FA]";
     this.resultMeta.className = "result-note";
-    this.resultMeta.textContent = "\u300C\u3088\u307F\u3068\u308B\u300D\u3092 \u304A\u3059\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
+    this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
     this.suggestionList.className = "suggestion-list";
-    panel.append(
-      panelHeading("\u3088\u307F\u3068\u308A", "\u307E\u3061\u304C\u3063\u3066\u3044\u305F\u3089\u3001\u4E0B\u306E\u5019\u88DC\u3092 \u3048\u3089\u3079\u307E\u3059\u3002"),
-      previewCard,
-      finalCard
-    );
+    panel.append(panelHeading("\u8AAD\u307F\u53D6\u308A", "\u7D50\u679C\u304C\u8AA4\u3063\u3066\u3044\u308B\u5834\u5408\u306F\u3001\u4E0B\u306E\u5019\u88DC\u3092 \u3048\u3089\u3079\u307E\u3059\u3002"), previewCard, finalCard);
     return panel;
   }
   bindEvents() {
@@ -998,32 +967,29 @@ var HandwriteSearchApp = class {
       this.cancelPendingPreview();
       this.currentResult = null;
       this.previewGeneration += 1;
-      this.previewText.textContent = "\u307E\u3060 \u307F\u3066\u3044\u307E\u305B\u3093\u3002";
-      this.previewMeta.textContent = "\u304B\u304D\u306F\u3058\u3081\u308B\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
-      this.resultText.textContent = "\u307E\u3060 \u3088\u3093\u3067\u3044\u307E\u305B\u3093\u3002";
-      this.resultMeta.textContent = "\u3082\u3046\u4E00\u5EA6 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002";
+      this.previewText.textContent = "[\u672A\u8A18\u5165]";
+      this.previewMeta.textContent = "\u66F8\u304D\u59CB\u3081\u308B\u3068\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
+      this.resultText.textContent = "[\u672A\u691C\u51FA]";
+      this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
       this.renderSuggestions([]);
-      this.setStatus("\u3051\u3057\u307E\u3057\u305F\u3002\u3082\u3046\u4E00\u5EA6 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
+      this.setStatus("\u30AF\u30EA\u30A2\u3057\u307E\u3057\u305F\u3002\u3082\u3046\u4E00\u5EA6 \u66F8\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
     });
   }
   async initializeRecognizers() {
-    this.setStatus("\u306F\u3058\u3081\u308B \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026");
+    this.setStatus("\u8D77\u52D5\u4E2D...");
     this.setBusy(true);
     try {
-      const [modelBuffer, dictionary] = await Promise.all([
-        this.previewAssets.getModelBuffer(() => this.setStatus("\u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026")),
-        this.previewAssets.getDictionary(() => this.setStatus("\u3053\u3068\u3070\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026"))
-      ]);
+      const [modelBuffer, dictionary] = await Promise.all([this.previewAssets.getModelBuffer(() => this.setStatus("\u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026")), this.previewAssets.getDictionary(() => this.setStatus("\u3053\u3068\u3070\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026"))]);
       await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
       this.previewReady = true;
       this.kanaRecognizer.initialize();
-      this.previewMeta.textContent = "\u304B\u304F\u305F\u3073\u306B \u3053\u3053\u3092 \u307F\u307E\u3059\u3002";
-      this.setStatus("\u304B\u3051\u307E\u3059\u3002\u300C\u3088\u307F\u3068\u308B\u300D\u3092 \u304A\u3059\u3068 \u3057\u3063\u304B\u308A \u305F\u3057\u304B\u3081\u307E\u3059\u3002");
+      this.previewMeta.textContent = "\u66F8\u304D\u59CB\u3081\u308B\u3068\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
+      this.setStatus("\u6E96\u5099\u5B8C\u4E86");
       void this.prepareAccurateRecognizer().catch(() => void 0);
       void this.prepareHandwrittenClassifier().catch(() => void 0);
     } catch (error) {
       console.error(error);
-      this.setStatus(`\u3058\u3085\u3093\u3073\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u8D77\u52D5\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
     } finally {
       this.setBusy(false);
     }
@@ -1033,17 +999,14 @@ var HandwriteSearchApp = class {
       return this.accurateReadyPromise;
     }
     this.accurateReadyPromise = (async () => {
-      const [modelBuffer, dictionary] = await Promise.all([
-        this.accurateAssets.getModelBuffer(),
-        this.accurateAssets.getDictionary()
-      ]);
+      const [modelBuffer, dictionary] = await Promise.all([this.accurateAssets.getModelBuffer(), this.accurateAssets.getDictionary()]);
       await this.accurateWorker.initialize(ACCURATE_RECOGNITION_MANIFEST, modelBuffer, dictionary);
       this.accurateReady = true;
     })().catch((error) => {
       this.accurateReady = false;
       this.accurateReadyPromise = null;
       console.error(error);
-      this.setStatus(`\u304F\u308F\u3057\u3044 \u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u8A73\u7D30\u306A\u8AAD\u307F\u53D6\u308A\u306E\u6E96\u5099\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
       throw error;
     });
     return this.accurateReadyPromise;
@@ -1053,38 +1016,35 @@ var HandwriteSearchApp = class {
       return this.classifierReadyPromise;
     }
     this.classifierReadyPromise = (async () => {
-      const [modelBuffer, labels] = await Promise.all([
-        this.classifierAssets.getModelBuffer(),
-        this.classifierAssets.getLabels()
-      ]);
+      const [modelBuffer, labels] = await Promise.all([this.classifierAssets.getModelBuffer(), this.classifierAssets.getLabels()]);
       await this.classifierWorker.initialize(HANDWRITTEN_CLASSIFIER_MANIFEST, modelBuffer, labels);
       this.classifierReady = true;
     })().catch((error) => {
       this.classifierReady = false;
       this.classifierReadyPromise = null;
       console.error(error);
-      this.setStatus(`\u624B\u66F8\u304D\u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u624B\u66F8\u304D\u8AAD\u307F\u53D6\u308A\u306E\u6E96\u5099\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
       throw error;
     });
     return this.classifierReadyPromise;
   }
   handleCanvasChanged() {
     this.currentResult = null;
-    this.resultText.textContent = "\u307E\u3060 \u3088\u3093\u3067\u3044\u307E\u305B\u3093\u3002";
-    this.resultMeta.textContent = "\u300C\u3088\u307F\u3068\u308B\u300D\u3092 \u304A\u3059\u3068 \u3057\u3063\u304B\u308A \u305F\u3057\u304B\u3081\u307E\u3059\u3002";
+    this.resultText.textContent = "[\u672A\u691C\u51FA]";
+    this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
     this.renderSuggestions([]);
     if (this.canvasController.strokeCount === 0) {
-      this.previewText.textContent = "\u307E\u3060 \u307F\u3066\u3044\u307E\u305B\u3093\u3002";
-      this.previewMeta.textContent = "\u304B\u304D\u306F\u3058\u3081\u308B\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
+      this.previewText.textContent = "[\u672A\u8A18\u5165]";
+      this.previewMeta.textContent = "\u66F8\u304D\u59CB\u3081\u308B\u3068\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
       return;
     }
     if (!this.previewReady) {
-      this.previewText.textContent = "\u3058\u3085\u3093\u3073\u3057\u3066\u3044\u307E\u3059\u2026";
-      this.previewMeta.textContent = "\u3082\u3046\u5C11\u3057 \u304A\u307E\u3061\u304F\u3060\u3055\u3044\u3002";
+      this.previewText.textContent = "\u6E96\u5099\u4E2D...";
+      this.previewMeta.textContent = "\u3082\u3046\u5C11\u3057\u304A\u5F85\u3061\u304F\u3060\u3055\u3044\u3002";
       return;
     }
-    this.previewText.textContent = "\u307F\u3066\u3044\u307E\u3059\u2026";
-    this.previewMeta.textContent = "\u3044\u307E\u306E \u304B\u305F\u3061\u3092 \u304B\u304F\u306B\u3093\u3057\u3066\u3044\u307E\u3059\u3002";
+    this.previewText.textContent = "\u691C\u51FA\u4E2D...";
+    this.previewMeta.textContent = "\u73FE\u5728\u306E\u624B\u66F8\u304D\u3092\u691C\u51FA\u4E2D\u3067\u3059\u3002";
     this.schedulePreviewRecognition();
   }
   schedulePreviewRecognition() {
@@ -1118,14 +1078,14 @@ var HandwriteSearchApp = class {
       if (generation !== this.previewGeneration) {
         return;
       }
-      const previewText = kanaResult?.text || result.text || "\u307E\u3060 \u308F\u304B\u308A\u307E\u305B\u3093\u3002";
+      const previewText = kanaResult?.text || result.text || "\u691C\u51FA\u5931\u6557";
       this.previewText.textContent = previewText;
-      this.previewMeta.textContent = kanaResult ? "\u304B\u306A\u3068\u3057\u3066\u306F \u3053\u306E\u3088\u3046\u306B \u898B\u3048\u307E\u3059\u3002" : previewText === "\u307E\u3060 \u308F\u304B\u308A\u307E\u305B\u3093\u3002" ? "\u3082\u3046\u5C11\u3057 \u304A\u304A\u304D\u304F \u304B\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u3044\u307E\u306F \u3053\u306E\u3088\u3046\u306B \u898B\u3048\u307E\u3059\u3002";
+      this.previewMeta.textContent = kanaResult ? "\u4EEE\u540D\u3068\u3057\u3066\u691C\u51FA" : previewText === "\u691C\u51FA\u5931\u6557" ? "\u691C\u51FA\u306B\u5931\u6557\u3057\u307E\u3057\u305F" : "\u691C\u51FA\u3057\u307E\u3057\u305F";
     } catch (error) {
       console.error(error);
       if (generation === this.previewGeneration) {
-        this.previewText.textContent = "\u307F\u3089\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
-        this.previewMeta.textContent = "\u3082\u3046\u4E00\u5EA6 \u305F\u3081\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+        this.previewText.textContent = "\u691C\u51FA\u5931\u6557";
+        this.previewMeta.textContent = "\u3082\u3046\u4E00\u5EA6\u66F8\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002";
       }
     } finally {
       this.previewRunning = false;
@@ -1137,16 +1097,16 @@ var HandwriteSearchApp = class {
   }
   async runRecognition() {
     if (!this.previewReady) {
-      this.setStatus("\u307E\u3060 \u3058\u3085\u3093\u3073\u4E2D\u3067\u3059\u3002\u5C11\u3057 \u304A\u307E\u3061\u304F\u3060\u3055\u3044\u3002");
+      this.setStatus("\u307E\u3060\u6E96\u5099\u304C\u3067\u304D\u3066\u3044\u307E\u305B\u3093\u3002\u3057\u3070\u3089\u304F\u3057\u3066\u304B\u3089\u3082\u3046\u4E00\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002");
       return;
     }
     if (this.canvasController.strokeCount === 0) {
-      this.setStatus("\u307E\u305A \u3082\u3058\u3092 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
+      this.setStatus("\u307E\u3060\u4F55\u3082\u66F8\u304B\u308C\u3066\u3044\u307E\u305B\u3093\u3002\u4F55\u304B\u66F8\u3044\u3066\u304B\u3089\u3001\u3082\u3046\u4E00\u5EA6\u300C\u8AAD\u307F\u53D6\u308A\u300D\u3092\u62BC\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
       return;
     }
     this.cancelPendingPreview();
     this.setBusy(true);
-    this.setStatus("\u3088\u307F\u3068\u3063\u3066\u3044\u307E\u3059\u2026");
+    this.setStatus("\u691C\u51FA\u4E2D...");
     try {
       const imageData = this.canvasController.exportImageData();
       const previewPromise = this.previewWorker.recognize(imageData);
@@ -1159,25 +1119,21 @@ var HandwriteSearchApp = class {
         console.error(error);
         return null;
       });
-      const [previewResult, accurateResult, handwrittenResult] = await Promise.all([
-        previewPromise,
-        accuratePromise,
-        handwrittenPromise
-      ]);
+      const [previewResult, accurateResult, handwrittenResult] = await Promise.all([previewPromise, accuratePromise, handwrittenPromise]);
       const selection = selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult);
       const suggestions = buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection);
       this.currentResult = selection.result;
       this.currentResult.suggestions = suggestions;
-      this.previewText.textContent = kanaResult?.text || previewResult.text || "\u307E\u3060 \u308F\u304B\u308A\u307E\u305B\u3093\u3002";
-      this.previewMeta.textContent = kanaResult ? "\u304B\u306A\u3068\u3057\u3066\u306F \u3053\u306E\u3088\u3046\u306B \u898B\u3048\u307E\u3059\u3002" : "\u3044\u307E\u306E \u3088\u305D\u3046\u3067\u3059\u3002";
-      const finalText = selection.result.text || "\u3088\u304F \u308F\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
+      this.previewText.textContent = kanaResult?.text || previewResult.text || "\u691C\u51FA\u5931\u6557";
+      this.previewMeta.textContent = kanaResult ? "\u4EEE\u540D\u3068\u3057\u3066\u691C\u51FA" : "\u691C\u51FA\u3057\u307E\u3057\u305F";
+      const finalText = selection.result.text || "\u691C\u51FA\u5931\u6557";
       this.resultText.textContent = finalText;
       this.resultMeta.textContent = buildFinalMessage(finalText, suggestions.length);
       this.renderSuggestions(suggestions);
-      this.setStatus(finalText === "\u3088\u304F \u308F\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002" ? "\u3082\u3046\u4E00\u5EA6 \u304A\u304A\u304D\u304F \u304B\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u3051\u3063\u304B\u3092 \u51FA\u3057\u307E\u3057\u305F\u3002");
+      this.setStatus(finalText === "\u691C\u51FA\u5931\u6557" ? "\u3082\u3046\u4E00\u5EA6\u66F8\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u691C\u51FA\u3057\u307E\u3057\u305F\u3002");
     } catch (error) {
       console.error(error);
-      this.setStatus(`\u3088\u307F\u3068\u308A\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u8AAD\u307F\u53D6\u308A\u5931\u6557: ${error.message}`);
     } finally {
       this.setBusy(false);
     }
@@ -1204,8 +1160,7 @@ var HandwriteSearchApp = class {
       chip.title = suggestion.source;
       chip.addEventListener("click", () => {
         this.resultText.textContent = suggestion.text;
-        this.resultMeta.textContent = "\u3048\u3089\u3093\u3060\u5019\u88DC\u3092 \u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002";
-        this.setStatus(`\u300C${suggestion.text}\u300D\u3092 \u3048\u3089\u3073\u307E\u3057\u305F\u3002`);
+        this.resultMeta.textContent = "\u9078\u629E\u3057\u305F\u5019\u88DC\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002";
       });
       this.suggestionList.append(chip);
     }
@@ -1312,10 +1267,10 @@ function kanaResultToOcrResult(result) {
   };
 }
 function buildFinalMessage(text, suggestionCount) {
-  if (!text || text === "\u3088\u304F \u308F\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002") {
-    return "\u3088\u304F \u308F\u304B\u3089\u306A\u304B\u3063\u305F\u305F\u3081\u3001\u3082\u3046\u4E00\u5EA6 \u304A\u305F\u3081\u3057\u304F\u3060\u3055\u3044\u3002";
+  if (!text || text === "\u691C\u51FA\u5931\u6557") {
+    return "\u691C\u51FA\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u3082\u3046\u4E00\u5EA6\u66F8\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002";
   }
-  return suggestionCount > 0 ? "\u3044\u3061\u3070\u3093\u8FD1\u3044\u5019\u88DC\u3067\u3059\u3002\u4E0B\u306E\u300C\u3082\u3057\u304B\u3057\u3066\u300D\u3082 \u3048\u3089\u3079\u307E\u3059\u3002" : "\u3044\u3061\u3070\u3093\u8FD1\u3044\u5019\u88DC\u3067\u3059\u3002";
+  return suggestionCount > 0 ? "\u6700\u3082\u8FD1\u3044\u5019\u88DC\u3067\u3059\u3002\u4E0B\u306E\u300C\u3082\u3057\u304B\u3057\u3066\u300D\u304B\u3089\u4FEE\u6B63\u3067\u304D\u307E\u3059\u3002" : "\u6700\u3082\u8FD1\u3044\u5019\u88DC\u3067\u3059\u3002";
 }
 function handwrittenResultToOcrResult(result) {
   return {
@@ -1417,18 +1372,6 @@ function div(className, ...children) {
     element.append(...children);
   }
   return element;
-}
-function stepCard(number, title, text) {
-  const card = div("step-card");
-  const badge = document.createElement("span");
-  badge.className = "step-number";
-  badge.textContent = number;
-  const titleElement = document.createElement("h2");
-  titleElement.className = "step-title";
-  titleElement.textContent = title;
-  const textElement = paragraph("step-text", text);
-  card.append(badge, titleElement, textElement);
-  return card;
 }
 function panelHeading(title, subtitle) {
   const header = div("panel-heading");
