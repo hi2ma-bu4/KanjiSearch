@@ -190,7 +190,6 @@ var HandwritingCanvas = class {
     const { x, y } = this.getPoint(event);
     this.ctx.beginPath();
     this.ctx.moveTo(x, y);
-    this.drawDot(x, y, event.pressure);
   };
   onPointerMove = (event) => {
     if (!this.isDrawing || this.activePointerId !== event.pointerId) {
@@ -223,13 +222,6 @@ var HandwritingCanvas = class {
   scaleBrush(pressure) {
     const safePressure = pressure > 0 ? pressure : 0.65;
     return this.brushSize * (0.7 + safePressure * 0.4);
-  }
-  drawDot(x, y, pressure) {
-    this.ctx.fillStyle = "#18110b";
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, this.scaleBrush(pressure) / 2, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.closePath();
   }
   paintBackground() {
     this.ctx.save();
@@ -451,7 +443,7 @@ var HandwriteSearchApp = class {
     this.modelBadge.className = "status-pill";
     this.modelBadge.textContent = "\u30E2\u30C7\u30EB: PP-OCRv5 Chinese/Japanese (Apache-2.0)";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T02:39:45.107Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T03:05:10.557Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }

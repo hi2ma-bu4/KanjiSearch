@@ -1,8 +1,10 @@
 **/node_modules/**
-**/_memo/**
 **/venv/**
 **/__pycache__/**
-*.pyc
+**/.serena/**
+**/_memo/**
 
 .DS_Store
+
+*.pyc
 *.log
