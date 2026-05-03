@@ -2684,12 +2684,7 @@ var PpocrRecognizer = class {
     const segments = segmentIntoLines(imageData);
     const lines = [];
     for (const segment of segments) {
-      const input = preprocessForRecognition(
-        segment.imageData,
-        this.inputHeight,
-        this.preferredInputWidth,
-        this.maxInputWidth
-      );
+      const input = preprocessForRecognition(segment.imageData, this.inputHeight, this.preferredInputWidth, this.maxInputWidth);
       const tensor = new de("float32", input.data, input.dims);
       const outputs = await this.session.run({
         [this.session.inputNames[0]]: tensor

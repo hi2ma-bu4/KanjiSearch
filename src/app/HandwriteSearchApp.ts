@@ -9,6 +9,7 @@ import { analyzeRecognizedText } from "./LookupAnalyzer";
 import { LookupAssetService } from "./LookupAssetService";
 import { ModelAssetService } from "./ModelAssetService";
 import { OcrWorkerClient } from "./OcrWorkerClient";
+import { normalizeForDisplay } from "./textNormalization";
 import type { AppClassifierManifest, AppModelManifest, HandwrittenRecognitionResult, JapaneseLookupAsset, LookupAnalysis, LookupKanjiEntry, LookupMixedSegment, OcrLineResult, OcrResult } from "./types";
 
 const WASM_BINARY_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString();
@@ -354,6 +355,15 @@ export class HandwriteSearchApp {
 				});
 
 			const [previewResult, accurateResult, handwrittenResult] = await Promise.all([previewPromise, accuratePromise, handwrittenPromise]);
+
+			// Normalize OCR results
+			previewResult.text = normalizeForDisplay(previewResult.text);
+			previewResult.lines.forEach((line) => (line.text = normalizeForDisplay(line.text)));
+			if (accurateResult) {
+				accurateResult.text = normalizeForDisplay(accurateResult.text);
+				accurateResult.lines.forEach((line) => (line.text = normalizeForDisplay(line.text)));
+			}
+
 			const selection = selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult);
 			const suggestions = buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection);
 
@@ -362,7 +372,7 @@ export class HandwriteSearchApp {
 			this.previewText.textContent = kanaResult?.text || previewResult.text || "検出失敗";
 			this.previewMeta.textContent = kanaResult ? "仮名として検出" : "検出しました";
 
-			const finalText = selection.result.text || "検出失敗";
+			const finalText = normalizeForDisplay(selection.result.text) || "検出失敗";
 			this.renderSuggestions(suggestions);
 			await this.applyDisplayedResult(finalText, buildFinalMessage(finalText, suggestions.length));
 			this.setStatus(finalText === "検出失敗" ? "もう一度書いてみてください。" : "検出しました。");
@@ -641,13 +651,14 @@ function buildRecognitionSuggestions(previewResult: OcrResult, accurateResult: O
 	const suggestions = new Map<string, RecognitionSuggestion>();
 
 	const push = (text: string, score: number, source: string) => {
-		const normalized = normalizeForScoring(text);
+		const displayed = normalizeForDisplay(text.replace(/\s+/gu, ""));
+		const normalized = normalizeForScoring(displayed);
 		if (!normalized || normalized === normalizeForScoring(selection.result.text)) {
 			return;
 		}
 		const existing = suggestions.get(normalized);
 		if (!existing || score > existing.score) {
-			suggestions.set(normalized, { text: normalized, score, source });
+			suggestions.set(normalized, { text: displayed, score, source });
 		}
 	};
 

@@ -49,7 +49,8 @@ def main() -> int:
     model = tf.keras.models.load_model(model_path, compile=False)
     input_tensor = model.inputs[0]
     input_name = input_tensor.name.split(":", maxsplit=1)[0]
-    input_shape = [dimension if isinstance(dimension, int) and dimension > 0 else 1 for dimension in input_tensor.shape]
+    input_shape = [dimension if isinstance(
+        dimension, int) and dimension > 0 else 1 for dimension in input_tensor.shape]
     input_signature = [tf.TensorSpec(input_shape, tf.float32, name=input_name)]
 
     onnx_path = output_dir / "model.onnx"
@@ -96,7 +97,8 @@ def main() -> int:
 def load_labels(config_path: Path) -> list[str]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     id2label = config["id2label"]
-    ordered_items = sorted(((int(index), label) for index, label in id2label.items()), key=lambda item: item[0])
+    ordered_items = sorted(((int(index), label) for index,
+                           label in id2label.items()), key=lambda item: item[0])
     return [label for _, label in ordered_items]
 
 

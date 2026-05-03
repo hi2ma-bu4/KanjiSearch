@@ -1,4 +1,4 @@
-import { HandwriteSearchApp } from './app/HandwriteSearchApp';
+import { HandwriteSearchApp } from "./app/HandwriteSearchApp";
 
 const app = new HandwriteSearchApp();
 

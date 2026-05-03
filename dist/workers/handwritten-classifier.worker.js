@@ -2710,11 +2710,7 @@ var HandwrittenClassifier = class {
     }
     const perCharacterCandidates = [];
     for (const segment of segments) {
-      const tensor = new de(
-        "float32",
-        preprocessCharacter(segment.imageData, this.inputWidth, this.inputHeight, this.channels, this.layout),
-        this.layout === "nchw" ? [1, this.channels, this.inputHeight, this.inputWidth] : [1, this.inputHeight, this.inputWidth, this.channels]
-      );
+      const tensor = new de("float32", preprocessCharacter(segment.imageData, this.inputWidth, this.inputHeight, this.channels, this.layout), this.layout === "nchw" ? [1, this.channels, this.inputHeight, this.inputWidth] : [1, this.inputHeight, this.inputWidth, this.channels]);
       const outputs = await this.session.run({
         [this.session.inputNames[0]]: tensor
       });
@@ -2782,9 +2778,7 @@ function segmentIntoCharacters(imageData) {
     }
     groups.push({ ...component });
   }
-  return groups.map((group) => cropCharacterRegion(imageData, group.left, group.top, group.right, group.bottom)).filter(
-    (segment) => segment !== null
-  );
+  return groups.map((group) => cropCharacterRegion(imageData, group.left, group.top, group.right, group.bottom)).filter((segment) => segment !== null);
 }
 function shouldMergeIntoCharacter(current, next) {
   const gap = next.left - current.right;

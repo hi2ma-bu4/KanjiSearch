@@ -417,11 +417,7 @@ var KANA_CHARACTERS = Array.from(/* @__PURE__ */ new Set([...HIRAGANA, ...KATAKA
 var TEMPLATE_SIZE = 32;
 var DRAW_SIZE = 28;
 var FONT_SIZE = 52;
-var FONT_STACKS = [
-  '"BIZ UDPGothic", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif',
-  '"Hiragino Sans", "Noto Sans JP", sans-serif',
-  '"Hiragino Mincho ProN", "Yu Mincho", serif'
-];
+var FONT_STACKS = ['"BIZ UDPGothic", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif', '"Hiragino Sans", "Noto Sans JP", sans-serif', '"Hiragino Mincho ProN", "Yu Mincho", serif'];
 var KanaTemplateRecognizer = class {
   templates = [];
   initialized = false;
@@ -706,6 +702,179 @@ function profileDistance(left, right) {
   return total / left.length;
 }
 
+// src/app/textNormalization.ts
+var HALF_WIDTH_MAP = {
+  \uFF71: "\u30A2",
+  \uFF72: "\u30A4",
+  \uFF73: "\u30A6",
+  \uFF74: "\u30A8",
+  \uFF75: "\u30AA",
+  \uFF76: "\u30AB",
+  \uFF77: "\u30AD",
+  \uFF78: "\u30AF",
+  \uFF79: "\u30B1",
+  \uFF7A: "\u30B3",
+  \uFF7B: "\u30B5",
+  \uFF7C: "\u30B7",
+  \uFF7D: "\u30B9",
+  \uFF7E: "\u30BB",
+  \uFF7F: "\u30BD",
+  \uFF80: "\u30BF",
+  \uFF81: "\u30C1",
+  \uFF82: "\u30C4",
+  \uFF83: "\u30C6",
+  \uFF84: "\u30C8",
+  \uFF85: "\u30CA",
+  \uFF86: "\u30CB",
+  \uFF87: "\u30CC",
+  \uFF88: "\u30CD",
+  \uFF89: "\u30CE",
+  \uFF8A: "\u30CF",
+  \uFF8B: "\u30D2",
+  \uFF8C: "\u30D5",
+  \uFF8D: "\u30D8",
+  \uFF8E: "\u30DB",
+  \uFF8F: "\u30DE",
+  \uFF90: "\u30DF",
+  \uFF91: "\u30E0",
+  \uFF92: "\u30E1",
+  \uFF93: "\u30E2",
+  \uFF94: "\u30E4",
+  \uFF95: "\u30E6",
+  \uFF96: "\u30E8",
+  \uFF97: "\u30E9",
+  \uFF98: "\u30EA",
+  \uFF99: "\u30EB",
+  \uFF9A: "\u30EC",
+  \uFF9B: "\u30ED",
+  \uFF9C: "\u30EF",
+  \uFF66: "\u30F2",
+  \uFF9D: "\u30F3",
+  \uFF67: "\u30A1",
+  \uFF68: "\u30A3",
+  \uFF69: "\u30A5",
+  \uFF6A: "\u30A7",
+  \uFF6B: "\u30A9",
+  \uFF6C: "\u30E3",
+  \uFF6D: "\u30E5",
+  \uFF6E: "\u30E7",
+  \uFF6F: "\u30C3",
+  \uFF9E: "\u309B",
+  \uFF9F: "\u309C",
+  \uFF70: "\u30FC"
+};
+var DAKUTEN_MAP = {
+  "\u30AB\u309B": "\u30AC",
+  "\u30AD\u309B": "\u30AE",
+  "\u30AF\u309B": "\u30B0",
+  "\u30B1\u309B": "\u30B2",
+  "\u30B3\u309B": "\u30B4",
+  "\u30B5\u309B": "\u30B6",
+  "\u30B7\u309B": "\u30B8",
+  "\u30B9\u309B": "\u30BA",
+  "\u30BB\u309B": "\u30BC",
+  "\u30BD\u309B": "\u30BE",
+  "\u30BF\u309B": "\u30C0",
+  "\u30C1\u309B": "\u30C2",
+  "\u30C4\u309B": "\u30C5",
+  "\u30C6\u309B": "\u30C7",
+  "\u30C8\u309B": "\u30C9",
+  "\u30CF\u309B": "\u30D0",
+  "\u30D2\u309B": "\u30D3",
+  "\u30D5\u309B": "\u30D6",
+  "\u30D8\u309B": "\u30D9",
+  "\u30DB\u309B": "\u30DC",
+  "\u30CF\u309C": "\u30D1",
+  "\u30D2\u309C": "\u30D4",
+  "\u30D5\u309C": "\u30D7",
+  "\u30D8\u309C": "\u30DA",
+  "\u30DB\u309C": "\u30DD",
+  "\u30A6\u309B": "\u30F4",
+  "\u30EF\u309B": "\u30F7",
+  "\u30F0\u309B": "\u30F8",
+  "\u30F1\u309B": "\u30F9",
+  "\u30F2\u309B": "\u30FA"
+};
+var SMALL_TO_LARGE_MAP = {
+  \u3041: "\u3042",
+  \u3043: "\u3044",
+  \u3045: "\u3046",
+  \u3047: "\u3048",
+  \u3049: "\u304A",
+  \u3063: "\u3064",
+  \u3083: "\u3084",
+  \u3085: "\u3086",
+  \u3087: "\u3088",
+  \u308E: "\u308F",
+  \u30A1: "\u30A2",
+  \u30A3: "\u30A4",
+  \u30A5: "\u30A6",
+  \u30A7: "\u30A8",
+  \u30A9: "\u30AA",
+  \u30C3: "\u30C4",
+  \u30E3: "\u30E4",
+  \u30E5: "\u30E6",
+  \u30E7: "\u30E8",
+  \u30EE: "\u30EF",
+  \u30F5: "\u30AB",
+  \u30F6: "\u30B1"
+};
+var HISTORICAL_MAP = {
+  \u3090: "\u3044",
+  \u3091: "\u3048",
+  \u30F0: "\u30A4",
+  \u30F1: "\u30A8"
+};
+function toFullWidthKatakana(text) {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const full = HALF_WIDTH_MAP[char] || char;
+    result += full;
+  }
+  let combined = "";
+  for (let i = 0; i < result.length; i++) {
+    const char = result[i];
+    const next = result[i + 1];
+    if (next === "\u309B" || next === "\u309C") {
+      const pair = char + next;
+      if (DAKUTEN_MAP[pair]) {
+        combined += DAKUTEN_MAP[pair];
+        i++;
+        continue;
+      }
+    }
+    combined += char;
+  }
+  return combined;
+}
+function normalizeForDisplay(text) {
+  let normalized = toFullWidthKatakana(text);
+  return [...normalized].map((char) => {
+    let c = char;
+    c = SMALL_TO_LARGE_MAP[c] || c;
+    c = HISTORICAL_MAP[c] || c;
+    return c;
+  }).join("");
+}
+function normalizeForSearch(text) {
+  let normalized = normalizeForDisplay(text);
+  normalized = [...normalized].map((char) => {
+    const code = char.charCodeAt(0);
+    if (code >= 12449 && code <= 12534) {
+      return String.fromCharCode(code - 96);
+    }
+    return char;
+  }).join("");
+  const searchMap = {
+    \u3062: "\u3058",
+    \u3065: "\u305A",
+    \u30F6: "\u3051",
+    \u30F5: "\u304B"
+  };
+  return [...normalized].map((char) => searchMap[char] || char).join("");
+}
+
 // src/app/LookupAnalyzer.ts
 function isHiragana(character) {
   return /[\p{Script=Hiragana}ーゝゞ]/u.test(character);
@@ -721,15 +890,6 @@ function isKanji(character) {
 }
 function isSupportedCharacter(character) {
   return isKana(character) || isKanji(character);
-}
-function toHiragana(text) {
-  return [...text].map((character) => {
-    const codePoint = character.codePointAt(0);
-    if (codePoint && codePoint >= 12449 && codePoint <= 12534) {
-      return String.fromCodePoint(codePoint - 96);
-    }
-    return character;
-  }).join("");
 }
 function unique(values) {
   return [...new Set(values)];
@@ -829,7 +989,7 @@ function segmentMixedText(text, asset) {
   return segments;
 }
 function analyzeRecognizedText(text, asset) {
-  const normalizedText = text.replace(/\s+/gu, "");
+  const normalizedText = normalizeForDisplay(text.replace(/\s+/gu, ""));
   if (!normalizedText) {
     return {
       kind: "unsupported",
@@ -844,7 +1004,7 @@ function analyzeRecognizedText(text, asset) {
   const allKatakana = characters.every((character) => isKatakana(character));
   const allKanji = characters.every((character) => isKanji(character));
   if (allHiragana || allKatakana) {
-    const normalizedReading = toHiragana(normalizedText);
+    const normalizedReading = normalizeForSearch(normalizedText);
     return {
       kind: "reading",
       text: normalizedText,
@@ -887,12 +1047,23 @@ function parseLookupAsset(text) {
   if (!parsed.readingToWords || !parsed.wordToReadings || !parsed.kanji) {
     throw new Error("\u8F9E\u66F8\u30C7\u30FC\u30BF\u306B\u5FC5\u8981\u306A\u9805\u76EE\u304C\u4E0D\u8DB3\u3057\u3066\u3044\u307E\u3059\u3002");
   }
+  const readingToWords = {};
+  for (const [reading, words] of Object.entries(parsed.readingToWords)) {
+    const normalized = normalizeForSearch(reading);
+    if (!readingToWords[normalized]) {
+      readingToWords[normalized] = [];
+    }
+    readingToWords[normalized].push(...words);
+  }
+  for (const reading of Object.keys(readingToWords)) {
+    readingToWords[reading] = [...new Set(readingToWords[reading])];
+  }
   return {
     metadata: parsed.metadata ?? {
       generatedAt: "",
       sources: []
     },
-    readingToWords: parsed.readingToWords,
+    readingToWords,
     wordToReadings: parsed.wordToReadings,
     kanji: parsed.kanji
   };
@@ -1354,13 +1525,19 @@ var HandwriteSearchApp = class {
         return null;
       });
       const [previewResult, accurateResult, handwrittenResult] = await Promise.all([previewPromise, accuratePromise, handwrittenPromise]);
+      previewResult.text = normalizeForDisplay(previewResult.text);
+      previewResult.lines.forEach((line) => line.text = normalizeForDisplay(line.text));
+      if (accurateResult) {
+        accurateResult.text = normalizeForDisplay(accurateResult.text);
+        accurateResult.lines.forEach((line) => line.text = normalizeForDisplay(line.text));
+      }
       const selection = selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult);
       const suggestions = buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection);
       this.currentResult = selection.result;
       this.currentResult.suggestions = suggestions;
       this.previewText.textContent = kanaResult?.text || previewResult.text || "\u691C\u51FA\u5931\u6557";
       this.previewMeta.textContent = kanaResult ? "\u4EEE\u540D\u3068\u3057\u3066\u691C\u51FA" : "\u691C\u51FA\u3057\u307E\u3057\u305F";
-      const finalText = selection.result.text || "\u691C\u51FA\u5931\u6557";
+      const finalText = normalizeForDisplay(selection.result.text) || "\u691C\u51FA\u5931\u6557";
       this.renderSuggestions(suggestions);
       await this.applyDisplayedResult(finalText, buildFinalMessage(finalText, suggestions.length));
       this.setStatus(finalText === "\u691C\u51FA\u5931\u6557" ? "\u3082\u3046\u4E00\u5EA6\u66F8\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u691C\u51FA\u3057\u307E\u3057\u305F\u3002");
@@ -1597,13 +1774,14 @@ function buildHybridResult(previewResult, accurateResult) {
 function buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection) {
   const suggestions = /* @__PURE__ */ new Map();
   const push = (text, score, source) => {
-    const normalized = normalizeForScoring(text);
+    const displayed = normalizeForDisplay(text.replace(/\s+/gu, ""));
+    const normalized = normalizeForScoring(displayed);
     if (!normalized || normalized === normalizeForScoring(selection.result.text)) {
       return;
     }
     const existing = suggestions.get(normalized);
     if (!existing || score > existing.score) {
-      suggestions.set(normalized, { text: normalized, score, source });
+      suggestions.set(normalized, { text: displayed, score, source });
     }
   };
   push(previewResult.text, scoreRecognition(previewResult, 0), "preview");
