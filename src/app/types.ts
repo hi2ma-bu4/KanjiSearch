@@ -40,9 +40,12 @@ export interface OcrResult {
 }
 
 export interface AppModelManifest {
+  modelLabel: string;
   modelUrl: string;
   dictionaryUrl: string;
   wasmBinaryUrl: string;
   wasmModuleUrl: string;
+  preferredInputWidth: number;
+  maxInputWidth: number;
   cacheVersion: string;
 }

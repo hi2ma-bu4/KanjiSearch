@@ -127,6 +127,7 @@ var HandwritingCanvas = class {
   strokeCountValue = 0;
   brushSize = 16;
   onContentChanged = null;
+  lastContentNotifyAt = 0;
   setBrushSize(nextSize) {
     this.brushSize = nextSize;
   }
@@ -149,6 +150,7 @@ var HandwritingCanvas = class {
   }
   clear() {
     this.strokeCountValue = 0;
+    this.lastContentNotifyAt = 0;
     this.paintBackground();
     this.onContentChanged?.();
   }
@@ -186,6 +188,7 @@ var HandwritingCanvas = class {
     this.isDrawing = true;
     this.strokeCountValue += 1;
     this.canvas.setPointerCapture(event.pointerId);
+    this.lastContentNotifyAt = performance.now();
     this.onContentChanged?.();
     const { x, y } = this.getPoint(event);
     this.ctx.beginPath();
@@ -202,6 +205,10 @@ var HandwritingCanvas = class {
     this.ctx.lineWidth = this.scaleBrush(event.pressure);
     this.ctx.lineTo(x, y);
     this.ctx.stroke();
+    if (performance.now() - this.lastContentNotifyAt >= 120) {
+      this.lastContentNotifyAt = performance.now();
+      this.onContentChanged?.();
+    }
   };
   onPointerUp = (event) => {
     if (this.activePointerId !== event.pointerId) {
@@ -211,6 +218,8 @@ var HandwritingCanvas = class {
     this.activePointerId = null;
     this.ctx.closePath();
     this.canvas.releasePointerCapture(event.pointerId);
+    this.lastContentNotifyAt = performance.now();
+    this.onContentChanged?.();
   };
   getPoint(event) {
     const rect = this.canvas.getBoundingClientRect();
@@ -376,17 +385,34 @@ var OcrWorkerClient = class {
 };
 
 // src/app/HandwriteSearchApp.ts
-var OCR_MANIFEST = {
-  modelUrl: new URL("./assets/ocr/rec.onnx", import.meta.url).toString(),
-  dictionaryUrl: new URL("./assets/ocr/dict.txt", import.meta.url).toString(),
-  wasmBinaryUrl: new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString(),
-  wasmModuleUrl: new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.mjs", import.meta.url).toString(),
-  cacheVersion: "ppocrv5-ch-ja-v1"
+var WASM_BINARY_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString();
+var WASM_MODULE_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.mjs", import.meta.url).toString();
+var LIVE_PREVIEW_MANIFEST = {
+  modelLabel: "PP-OCRv5 Mobile",
+  modelUrl: new URL("./assets/ocr/mobile/rec.onnx", import.meta.url).toString(),
+  dictionaryUrl: new URL("./assets/ocr/mobile/dict.txt", import.meta.url).toString(),
+  wasmBinaryUrl: WASM_BINARY_URL,
+  wasmModuleUrl: WASM_MODULE_URL,
+  preferredInputWidth: 320,
+  maxInputWidth: 640,
+  cacheVersion: "ppocrv5-mobile-ja-v1"
+};
+var ACCURATE_RECOGNITION_MANIFEST = {
+  modelLabel: "PP-OCRv5 Server",
+  modelUrl: new URL("./assets/ocr/server/rec.onnx", import.meta.url).toString(),
+  dictionaryUrl: new URL("./assets/ocr/server/dict.txt", import.meta.url).toString(),
+  wasmBinaryUrl: WASM_BINARY_URL,
+  wasmModuleUrl: WASM_MODULE_URL,
+  preferredInputWidth: 320,
+  maxInputWidth: 640,
+  cacheVersion: "ppocrv5-ch-ja-server-v2"
 };
 var HandwriteSearchApp = class {
   database = new AppDatabase();
-  modelAssets = new ModelAssetService(this.database, OCR_MANIFEST);
-  worker = new OcrWorkerClient();
+  previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
+  accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
+  previewWorker = new OcrWorkerClient();
+  accurateWorker = new OcrWorkerClient();
   root = document.createElement("main");
   canvasElement = document.createElement("canvas");
   canvasController = new HandwritingCanvas(this.canvasElement);
@@ -398,24 +424,30 @@ var HandwriteSearchApp = class {
   progressLabel = document.createElement("div");
   brushInput = document.createElement("input");
   brushOutput = document.createElement("output");
+  previewText = document.createElement("pre");
+  previewMeta = document.createElement("p");
   resultText = document.createElement("pre");
   resultMeta = document.createElement("p");
   historyList = document.createElement("div");
   modelBadge = document.createElement("span");
   currentResult = null;
-  initialized = false;
+  previewReady = false;
+  accurateReady = false;
+  accurateReadyPromise = null;
+  previewTimer = null;
+  previewGeneration = 0;
+  previewRunning = false;
+  previewQueued = false;
   async mount(container) {
     this.root.className = "app-shell";
     this.buildLayout();
     container.replaceChildren(this.root);
     this.bindEvents();
     this.canvasController.setContentChangedListener(() => {
-      this.currentResult = null;
-      this.resultText.textContent = "\u624B\u66F8\u304D\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F\u3002";
-      this.resultMeta.textContent = "\u65B0\u3057\u3044\u5185\u5BB9\u3092\u8A8D\u8B58\u3059\u308B\u306B\u306F\u300C\u8A8D\u8B58\u3059\u308B\u300D\u3092\u62BC\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+      this.handleCanvasChanged();
     });
     await this.renderHistory();
-    await this.initializeRecognizer();
+    await this.initializeRecognizers();
     const resizeObserver = new ResizeObserver(() => this.canvasController.resize());
     resizeObserver.observe(this.canvasElement);
   }
@@ -427,7 +459,7 @@ var HandwriteSearchApp = class {
       heading("hero-title", "\u6F22\u5B57\u624B\u66F8\u304D\u691C\u7D22\u30C4\u30FC\u30EB"),
       paragraph(
         "hero-lead",
-        "\u30DE\u30A6\u30B9\u3084\u30BF\u30C3\u30C1\u3067\u66F8\u3044\u305F\u6587\u5B57\u3092\u305D\u306E\u5834\u3067OCR\u3057\u3001\u7D50\u679C\u3068\u63CF\u753B\u5C65\u6B74\u3092\u30D6\u30E9\u30A6\u30B6\u5185\u306B\u4FDD\u5B58\u3057\u307E\u3059\u3002\u77ED\u3044\u30E1\u30E2\u3001\u304B\u306A\u3001\u30AB\u30CA\u3001\u6F22\u5B57\u3092\u8907\u6570\u884C\u3067\u8A66\u305B\u308B\u3088\u3046\u306B\u3001\u63CF\u753B\u9762\u30FBOCR\u30FB\u5C65\u6B74\u3092\u5206\u96E2\u3057\u305F\u69CB\u6210\u306B\u3057\u3066\u3044\u307E\u3059\u3002"
+        "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u30D7\u30EC\u30D3\u30E5\u30FC\u3068\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306E\u6700\u7D42\u8A8D\u8B58\u3092\u7D44\u307F\u5408\u308F\u305B\u3066\u3001\u304B\u306A\u30FB\u30AB\u30CA\u30FB\u6F22\u5B57\u3092\u77ED\u6587\u4E2D\u5FC3\u306B\u8AAD\u307F\u53D6\u308C\u308B\u3088\u3046\u8ABF\u6574\u3057\u3066\u3044\u307E\u3059\u3002\u63CF\u753B\u5C65\u6B74\u3068OCR\u7D50\u679C\u306F\u30D6\u30E9\u30A6\u30B6\u5185\u306B\u4FDD\u5B58\u3055\u308C\u307E\u3059\u3002"
       ),
       this.buildStatusStrip()
     );
@@ -441,9 +473,9 @@ var HandwriteSearchApp = class {
     this.statusLabel.className = "status-pill";
     this.statusLabel.textContent = "\u6E96\u5099\u4E2D\u2026";
     this.modelBadge.className = "status-pill";
-    this.modelBadge.textContent = "\u30E2\u30C7\u30EB: PP-OCRv5 Chinese/Japanese (Apache-2.0)";
+    this.modelBadge.textContent = "\u30E2\u30C7\u30EB: \u8EFD\u91CF PP-OCRv5 Mobile / \u9AD8\u7CBE\u5EA6 PP-OCRv5 Server";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T03:05:10.557Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T03:54:11.664Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }
@@ -453,13 +485,13 @@ var HandwriteSearchApp = class {
     inner.append(
       panelHeader(
         "\u66F8\u3044\u3066\u8A8D\u8B58\u3059\u308B",
-        "1\u3064\u306E\u5927\u304D\u306A\u30AD\u30E3\u30F3\u30D0\u30B9\u306B\u6570\u6587\u5B57\u304B\u3089\u6570\u884C\u307E\u3067\u66F8\u3051\u307E\u3059\u3002\u8A8D\u8B58\u6642\u306F\u884C\u3054\u3068\u306B\u5206\u5272\u3057\u3066\u51E6\u7406\u3057\u307E\u3059\u3002"
+        "1\u301C4\u6587\u5B57\u4E2D\u5FC3\u3001\u6700\u592710\u6587\u5B57\u7A0B\u5EA6\u306E\u304B\u306A\u30FB\u30AB\u30CA\u30FB\u6F22\u5B57\u3092\u60F3\u5B9A\u3057\u3066\u3044\u307E\u3059\u3002\u6700\u7D42\u8A8D\u8B58\u3067\u306F\u8EFD\u91CF/\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306E\u4E21\u65B9\u3092\u6BD4\u8F03\u3057\u307E\u3059\u3002"
       ),
       this.buildToolbar(),
       this.buildCanvasFrame(),
       hintRow([
-        "\u6307\u30FB\u30DA\u30F3\u30FB\u30DE\u30A6\u30B9\u306B\u5BFE\u5FDC",
-        "\u8907\u6570\u884C\u306F\u305D\u306E\u307E\u307E\u6539\u884C\u6271\u3044",
+        "\u63CF\u753B\u4E2D\u306F\u8EFD\u91CF\u30E2\u30C7\u30EB\u3067\u81EA\u52D5\u30D7\u30EC\u30D3\u30E5\u30FC",
+        "\u78BA\u5B9A\u6642\u306F2\u30E2\u30C7\u30EB\u3092\u6BD4\u8F03\u3057\u3066\u63A1\u7528",
         "\u7D50\u679C\u3068\u30B5\u30E0\u30CD\u30A4\u30EB\u306FIndexedDB\u306B\u4FDD\u5B58"
       ]),
       actionsRow(this.recognizeButton, this.clearButton, this.saveButton)
@@ -496,16 +528,25 @@ var HandwriteSearchApp = class {
     const inner = div("panel-inner");
     const footer = paragraph(
       "footer-note",
-      "\u4ECA\u56DE\u306E\u516C\u958B\u30E2\u30C7\u30EB\u306F1\u884C\u8A8D\u8B58\u30D9\u30FC\u30B9\u3067\u3059\u3002\u30DA\u30FC\u30B8\u5074\u3067\u884C\u5206\u5272\u3057\u3066\u304B\u3089 OCR \u3057\u3066\u3044\u308B\u305F\u3081\u3001\u591A\u884C\u5165\u529B\u306F\u884C\u5358\u4F4D\u3067\u6271\u3044\u307E\u3059\u3002"
+      "PP-OCR \u7CFB\u30E2\u30C7\u30EB\u306F1\u884C\u8A8D\u8B58\u30D9\u30FC\u30B9\u3067\u3059\u3002\u30DA\u30FC\u30B8\u5074\u3067\u884C\u5206\u5272\u3057\u3066\u304B\u3089\u63A8\u8AD6\u3057\u3001\u77ED\u3044\u65E5\u672C\u8A9E\u6587\u5B57\u5217\u5411\u3051\u306B\u30B9\u30B3\u30A2\u30EA\u30F3\u30B0\u3057\u3066\u6700\u7D42\u5019\u88DC\u3092\u9078\u3073\u307E\u3059\u3002"
     );
+    const previewCard = div("result-card result-card-preview");
+    const previewLabel = document.createElement("p");
+    previewLabel.className = "result-label";
+    previewLabel.textContent = "Live Preview";
+    this.previewText.className = "result-text result-text-preview";
+    this.previewText.textContent = "\u307E\u3060\u30D7\u30EC\u30D3\u30E5\u30FC\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
+    this.previewMeta.className = "result-meta";
+    this.previewMeta.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u6E96\u5099\u5F8C\u3001\u63CF\u753B\u306B\u5408\u308F\u305B\u3066\u5019\u88DC\u3092\u81EA\u52D5\u66F4\u65B0\u3057\u307E\u3059\u3002";
+    previewCard.append(previewLabel, this.previewText, this.previewMeta);
     const resultCard = div("result-card");
     const resultLabel = document.createElement("p");
     resultLabel.className = "result-label";
-    resultLabel.textContent = "Recognition";
+    resultLabel.textContent = "Final Recognition";
     this.resultText.className = "result-text";
     this.resultText.textContent = "\u307E\u3060\u8A8D\u8B58\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
     this.resultMeta.className = "result-meta";
-    this.resultMeta.textContent = "\u30E2\u30C7\u30EB\u3092\u521D\u671F\u5316\u3059\u308B\u3068\u3001\u3053\u3053\u306B\u8A8D\u8B58\u7D50\u679C\u304C\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
+    this.resultMeta.textContent = "\u9AD8\u7CBE\u5EA6\u8A8D\u8B58\u306F\u30E2\u30C7\u30EB\u6E96\u5099\u5F8C\u306B\u300C\u8A8D\u8B58\u3059\u308B\u300D\u3067\u5B9F\u884C\u3055\u308C\u307E\u3059\u3002";
     resultCard.append(resultLabel, this.resultText, this.resultMeta);
     const historyHeader = panelHeader(
       "\u5C65\u6B74",
@@ -516,9 +557,9 @@ var HandwriteSearchApp = class {
     inner.append(
       panelHeader(
         "\u8A8D\u8B58\u7D50\u679C",
-        "\u516C\u958B\u6E08\u307F\u306E ONNX \u30E2\u30C7\u30EB\u3092\u30D6\u30E9\u30A6\u30B6\u3067\u52D5\u304B\u3057\u3001\u6700\u65B0\u306E\u63CF\u753B\u3092\u305D\u306E\u5834\u3067\u8AAD\u307E\u305B\u307E\u3059\u3002"
+        "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306F\u8FFD\u5F93\u6027\u3092\u512A\u5148\u3001\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306F\u78BA\u5B9A\u7CBE\u5EA6\u3092\u512A\u5148\u3057\u307E\u3059\u3002\u6700\u7D42\u8868\u793A\u306B\u306F\u4E21\u65B9\u306E\u5019\u88DC\u3092\u6BD4\u8F03\u3057\u305F\u63A1\u7528\u7D50\u679C\u3092\u51FA\u3057\u307E\u3059\u3002"
       ),
-      div("result-stack", resultCard),
+      div("result-stack", previewCard, resultCard),
       historyHeader,
       historyActions,
       this.historyList,
@@ -539,9 +580,14 @@ var HandwriteSearchApp = class {
     });
     this.clearButton.addEventListener("click", () => {
       this.canvasController.clear();
+      this.cancelPendingPreview();
       this.currentResult = null;
+      this.previewGeneration += 1;
+      this.previewText.textContent = "\u307E\u3060\u30D7\u30EC\u30D3\u30E5\u30FC\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
+      this.previewMeta.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306F\u65B0\u3057\u3044\u5165\u529B\u3092\u5F85\u6A5F\u3057\u3066\u3044\u307E\u3059\u3002";
       this.resultText.textContent = "\u307E\u3060\u8A8D\u8B58\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
       this.resultMeta.textContent = "\u30AD\u30E3\u30F3\u30D0\u30B9\u3092\u6D88\u53BB\u3057\u307E\u3057\u305F\u3002";
+      this.setStatus("\u30AD\u30E3\u30F3\u30D0\u30B9\u3092\u6D88\u53BB\u3057\u307E\u3057\u305F\u3002");
     });
     this.saveButton.addEventListener("click", async () => {
       await this.saveCurrentSnapshot();
@@ -552,38 +598,131 @@ var HandwriteSearchApp = class {
       this.setStatus("\u5C65\u6B74\u3092\u524A\u9664\u3057\u307E\u3057\u305F\u3002");
     });
   }
-  async initializeRecognizer() {
-    this.setStatus("\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u3057\u3066\u3044\u307E\u3059\u2026");
+  async initializeRecognizers() {
+    this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u7528\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u3057\u3066\u3044\u307E\u3059\u2026");
     this.setBusy(true);
     try {
       const [modelBuffer, dictionary] = await Promise.all([
-        this.modelAssets.getModelBuffer((message) => this.setStatus(message)),
-        this.modelAssets.getDictionary((message) => this.setStatus(message))
+        this.previewAssets.getModelBuffer((message) => this.setStatus(`\u8EFD\u91CF\u30E2\u30C7\u30EB: ${message}`)),
+        this.previewAssets.getDictionary((message) => this.setStatus(`\u8EFD\u91CF\u30E2\u30C7\u30EB: ${message}`))
       ]);
-      await this.worker.initialize(OCR_MANIFEST, modelBuffer, dictionary);
-      this.initialized = true;
-      this.setStatus("\u6E96\u5099\u5B8C\u4E86\u3002\u624B\u66F8\u304D\u3057\u3066\u300C\u8A8D\u8B58\u3059\u308B\u300D\u3092\u62BC\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
+      this.previewReady = true;
+      this.previewMeta.textContent = "\u63CF\u753B\u306B\u5FDC\u3058\u3066\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u5019\u88DC\u3092\u81EA\u52D5\u66F4\u65B0\u3057\u307E\u3059\u3002";
+      this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u6E96\u5099\u5B8C\u4E86\u3002\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3092\u30D0\u30C3\u30AF\u30B0\u30E9\u30A6\u30F3\u30C9\u3067\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u2026");
+      void this.prepareAccurateRecognizer().catch(() => void 0);
     } catch (error) {
       console.error(error);
-      this.setStatus(`\u521D\u671F\u5316\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u521D\u671F\u5316\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
     } finally {
       this.setBusy(false);
     }
   }
-  async runRecognition() {
-    if (!this.initialized) {
-      this.setStatus("\u30E2\u30C7\u30EB\u304C\u307E\u3060\u6E96\u5099\u3067\u304D\u3066\u3044\u307E\u305B\u3093\u3002");
+  prepareAccurateRecognizer() {
+    if (this.accurateReadyPromise) {
+      return this.accurateReadyPromise;
+    }
+    this.accurateReadyPromise = (async () => {
+      const [modelBuffer, dictionary] = await Promise.all([
+        this.accurateAssets.getModelBuffer((message) => this.setStatus(`\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB: ${message}`)),
+        this.accurateAssets.getDictionary((message) => this.setStatus(`\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB: ${message}`))
+      ]);
+      await this.accurateWorker.initialize(ACCURATE_RECOGNITION_MANIFEST, modelBuffer, dictionary);
+      this.accurateReady = true;
+      this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u3068\u9AD8\u7CBE\u5EA6\u8A8D\u8B58\u306E\u4E21\u65B9\u304C\u6E96\u5099\u3067\u304D\u307E\u3057\u305F\u3002");
+    })().catch((error) => {
+      this.accurateReady = false;
+      this.accurateReadyPromise = null;
+      console.error(error);
+      this.setStatus(`\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306E\u521D\u671F\u5316\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
+      throw error;
+    });
+    return this.accurateReadyPromise;
+  }
+  handleCanvasChanged() {
+    this.currentResult = null;
+    this.resultText.textContent = "\u624B\u66F8\u304D\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F\u3002";
+    this.resultMeta.textContent = this.accurateReady ? "\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u66F4\u65B0\u3057\u3066\u3044\u307E\u3059\u3002\u78BA\u5B9A\u3059\u308B\u306B\u306F\u300C\u8A8D\u8B58\u3059\u308B\u300D\u3092\u62BC\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : "\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u66F4\u65B0\u3057\u3066\u3044\u307E\u3059\u3002\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3082\u6E96\u5099\u4E2D\u3067\u3059\u3002";
+    if (!this.previewReady) {
+      this.previewText.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u4E2D\u3067\u3059\u2026";
+      this.previewMeta.textContent = "\u6E96\u5099\u3067\u304D\u6B21\u7B2C\u3001\u63CF\u753B\u306B\u8FFD\u5F93\u3057\u3066\u5019\u88DC\u3092\u51FA\u3057\u307E\u3059\u3002";
       return;
     }
-    this.setBusy(true);
-    this.setStatus("OCR\u3092\u5B9F\u884C\u3057\u3066\u3044\u307E\u3059\u2026");
+    this.previewText.textContent = "\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u66F4\u65B0\u3057\u3066\u3044\u307E\u3059\u2026";
+    this.previewMeta.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u3067\u6700\u65B0\u30B9\u30C8\u30ED\u30FC\u30AF\u3092\u78BA\u8A8D\u4E2D\u3067\u3059\u3002";
+    this.schedulePreviewRecognition();
+  }
+  schedulePreviewRecognition() {
+    this.cancelPendingPreview();
+    this.previewGeneration += 1;
+    const generation = this.previewGeneration;
+    this.previewTimer = window.setTimeout(() => {
+      this.previewTimer = null;
+      void this.runPreviewRecognition(generation);
+    }, 220);
+  }
+  cancelPendingPreview() {
+    if (this.previewTimer !== null) {
+      window.clearTimeout(this.previewTimer);
+      this.previewTimer = null;
+    }
+  }
+  async runPreviewRecognition(generation) {
+    if (!this.previewReady) {
+      return;
+    }
+    if (this.previewRunning) {
+      this.previewQueued = true;
+      return;
+    }
+    this.previewRunning = true;
     try {
-      const result = await this.worker.recognize(this.canvasController.exportImageData());
-      this.currentResult = result;
-      this.resultText.textContent = result.text || "\u6587\u5B57\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
-      this.resultMeta.textContent = `\u884C\u6570 ${result.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
-      this.setStatus("\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002");
+      const result = await this.previewWorker.recognize(this.canvasController.exportImageData());
+      if (generation !== this.previewGeneration) {
+        return;
+      }
+      this.previewText.textContent = result.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
+      this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${result.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
+    } catch (error) {
+      console.error(error);
+      if (generation === this.previewGeneration) {
+        this.previewText.textContent = "\u30D7\u30EC\u30D3\u30E5\u30FC\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
+        this.previewMeta.textContent = error.message;
+      }
+    } finally {
+      this.previewRunning = false;
+      if (this.previewQueued) {
+        this.previewQueued = false;
+        void this.runPreviewRecognition(this.previewGeneration);
+      }
+    }
+  }
+  async runRecognition() {
+    if (!this.previewReady) {
+      this.setStatus("\u8EFD\u91CF\u30E2\u30C7\u30EB\u304C\u307E\u3060\u6E96\u5099\u3067\u304D\u3066\u3044\u307E\u305B\u3093\u3002");
+      return;
+    }
+    this.cancelPendingPreview();
+    this.setBusy(true);
+    this.setStatus(this.accurateReady ? "\u8EFD\u91CF + \u9AD8\u7CBE\u5EA6OCR\u3092\u5B9F\u884C\u3057\u3066\u3044\u307E\u3059\u2026" : "\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u3057\u3064\u3064OCR\u3092\u5B9F\u884C\u3057\u3066\u3044\u307E\u3059\u2026");
+    try {
+      const imageData = this.canvasController.exportImageData();
+      const previewPromise = this.previewWorker.recognize(imageData);
+      const accuratePromise = this.prepareAccurateRecognizer().then(() => this.accurateWorker.recognize(imageData)).catch((error) => {
+        console.error(error);
+        return null;
+      });
+      const [previewResult, accurateResult] = await Promise.all([previewPromise, accuratePromise]);
+      const selection = selectBestRecognition(previewResult, accurateResult);
+      this.currentResult = selection.result;
+      this.previewText.textContent = previewResult.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
+      this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${previewResult.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
+      this.resultText.textContent = selection.result.text || "\u6587\u5B57\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
+      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult);
+      const statusMessage = accurateResult ? `\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u63A1\u7528: ${selection.label}` : "\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306A\u3057\u3067\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002";
+      this.setStatus(statusMessage);
       await this.saveCurrentSnapshot();
+      this.setStatus(statusMessage);
     } catch (error) {
       console.error(error);
       this.setStatus(`\u8A8D\u8B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
@@ -652,6 +791,9 @@ var HandwriteSearchApp = class {
           elapsedMs: 0,
           lines: []
         };
+        this.previewGeneration += 1;
+        this.previewText.textContent = session.recognizedText || "\u4FDD\u5B58\u6642\u70B9\u3067\u306F\u672A\u8A8D\u8B58\u3067\u3057\u305F\u3002";
+        this.previewMeta.textContent = `${new Date(session.updatedAt).toLocaleString("ja-JP")} \u306E\u4FDD\u5B58\u5185\u5BB9\u3067\u3059\u3002`;
         this.resultText.textContent = session.recognizedText || "\u4FDD\u5B58\u6642\u70B9\u3067\u306F\u672A\u8A8D\u8B58\u3067\u3057\u305F\u3002";
         this.resultMeta.textContent = `${new Date(session.updatedAt).toLocaleString("ja-JP")} \u306E\u4FDD\u5B58\u5185\u5BB9\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F\u3002`;
         this.setStatus("\u5C65\u6B74\u304B\u3089\u30AD\u30E3\u30F3\u30D0\u30B9\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F\u3002");
@@ -668,6 +810,95 @@ var HandwriteSearchApp = class {
     this.statusLabel.textContent = message;
   }
 };
+function selectBestRecognition(previewResult, accurateResult) {
+  const candidates = [
+    {
+      label: LIVE_PREVIEW_MANIFEST.modelLabel,
+      result: previewResult,
+      score: scoreRecognition(previewResult, 0.01)
+    }
+  ];
+  if (accurateResult) {
+    candidates.push({
+      label: ACCURATE_RECOGNITION_MANIFEST.modelLabel,
+      result: accurateResult,
+      score: scoreRecognition(accurateResult, 0.05)
+    });
+    const hybridResult = buildHybridResult(previewResult, accurateResult);
+    if (hybridResult) {
+      candidates.push({
+        label: "\u8907\u5408\u7D50\u679C",
+        result: hybridResult,
+        score: scoreRecognition(hybridResult, 0.035)
+      });
+    }
+  }
+  return candidates.reduce((best, current) => current.score > best.score ? current : best);
+}
+function buildHybridResult(previewResult, accurateResult) {
+  if (previewResult.lines.length === 0 || previewResult.lines.length !== accurateResult.lines.length) {
+    return null;
+  }
+  const lines = accurateResult.lines.map((accurateLine, index) => {
+    const previewLine = previewResult.lines[index];
+    return scoreLine(previewLine) > scoreLine(accurateLine) ? previewLine : accurateLine;
+  });
+  return {
+    text: lines.map((line) => line.text).join("\n"),
+    averageConfidence: lines.length === 0 ? 0 : lines.reduce((sum, line) => sum + line.confidence, 0) / lines.length,
+    lines,
+    elapsedMs: Math.max(previewResult.elapsedMs, accurateResult.elapsedMs)
+  };
+}
+function buildFinalMeta(selection, previewResult, accurateResult) {
+  const parts = [
+    `\u63A1\u7528 ${selection.label}`,
+    `\u884C\u6570 ${selection.result.lines.length}`,
+    `\u5E73\u5747\u4FE1\u983C\u5EA6 ${(selection.result.averageConfidence * 100).toFixed(1)}%`,
+    `\u8EFD\u91CF ${(previewResult.averageConfidence * 100).toFixed(1)}%`
+  ];
+  if (accurateResult) {
+    parts.push(`\u9AD8\u7CBE\u5EA6 ${(accurateResult.averageConfidence * 100).toFixed(1)}%`);
+    parts.push(`${Math.max(previewResult.elapsedMs, accurateResult.elapsedMs).toFixed(0)}ms`);
+  } else {
+    parts.push(`${previewResult.elapsedMs.toFixed(0)}ms`);
+  }
+  return parts.join(" / ");
+}
+function scoreRecognition(result, bias) {
+  const text = normalizeForScoring(result.text);
+  if (!text) {
+    return -1 + bias;
+  }
+  const characters = [...text];
+  const allowedCount = characters.filter((character) => isAllowedJapaneseCharacter(character)).length;
+  const allowedRatio = allowedCount / characters.length;
+  const confidence = clamp(result.averageConfidence, 0, 1);
+  const length = characters.length;
+  const lengthScore = length <= 4 ? 1 : length <= 10 ? 0.9 : 0.45;
+  const singleLineBonus = result.lines.length <= 1 ? 0.04 : 0;
+  return confidence * 0.58 + allowedRatio * 0.25 + lengthScore * 0.14 + singleLineBonus + bias;
+}
+function scoreLine(line) {
+  const text = normalizeForScoring(line.text);
+  if (!text) {
+    return -1;
+  }
+  const characters = [...text];
+  const allowedRatio = characters.filter((character) => isAllowedJapaneseCharacter(character)).length / characters.length;
+  const length = characters.length;
+  const lengthScore = length <= 4 ? 1 : length <= 10 ? 0.9 : 0.45;
+  return clamp(line.confidence, 0, 1) * 0.62 + allowedRatio * 0.24 + lengthScore * 0.14;
+}
+function normalizeForScoring(text) {
+  return text.replace(/\s+/gu, "");
+}
+function isAllowedJapaneseCharacter(character) {
+  return /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}々〆〇ヶヵー]/u.test(character);
+}
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
 function heading(className, text) {
   const element = document.createElement("h1");
   element.className = className;

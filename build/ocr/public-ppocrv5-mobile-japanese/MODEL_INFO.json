@@ -1,0 +1,12 @@
+{
+  "model_id": "ilaylow/PP_OCRv5_mobile_onnx",
+  "source_url": "https://huggingface.co/ilaylow/PP_OCRv5_mobile_onnx",
+  "language_group": "Chinese/Japanese",
+  "license": "Apache-2.0",
+  "intended_use": "Low-latency handwriting preview on web clients for short Japanese text.",
+  "notes": [
+    "Converted ONNX model derived from PaddlePaddle PP-OCRv5_mobile_rec.",
+    "Shares the same 18,385-class output space as the PP-OCRv5 server Japanese/Chinese model in this project.",
+    "Used for live preview while the server-sized model is reserved for final recognition."
+  ]
+}

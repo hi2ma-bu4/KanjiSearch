@@ -13,7 +13,12 @@ async function copyStaticAssets() {
   await cp(path.join(srcDir, 'index.html'), path.join(distDir, 'index.html'));
   await cp(
     path.join(projectRoot, 'build', 'ocr', 'public-ppocrv5-chinese-japanese'),
-    path.join(distDir, 'assets', 'ocr'),
+    path.join(distDir, 'assets', 'ocr', 'server'),
+    { recursive: true }
+  );
+  await cp(
+    path.join(projectRoot, 'build', 'ocr', 'public-ppocrv5-mobile-japanese'),
+    path.join(distDir, 'assets', 'ocr', 'mobile'),
     { recursive: true }
   );
   const ortDistDir = path.join(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');

@@ -6,6 +6,7 @@ export class HandwritingCanvas {
 	private strokeCountValue = 0;
 	private brushSize = 16;
 	private onContentChanged: (() => void) | null = null;
+	private lastContentNotifyAt = 0;
 
 	constructor(private readonly canvas: HTMLCanvasElement) {
 		const ctx = canvas.getContext("2d");
@@ -52,6 +53,7 @@ export class HandwritingCanvas {
 
 	clear(): void {
 		this.strokeCountValue = 0;
+		this.lastContentNotifyAt = 0;
 		this.paintBackground();
 		this.onContentChanged?.();
 	}
@@ -97,6 +99,7 @@ export class HandwritingCanvas {
 		this.isDrawing = true;
 		this.strokeCountValue += 1;
 		this.canvas.setPointerCapture(event.pointerId);
+		this.lastContentNotifyAt = performance.now();
 		this.onContentChanged?.();
 
 		const { x, y } = this.getPoint(event);
@@ -116,6 +119,10 @@ export class HandwritingCanvas {
 		this.ctx.lineWidth = this.scaleBrush(event.pressure);
 		this.ctx.lineTo(x, y);
 		this.ctx.stroke();
+		if (performance.now() - this.lastContentNotifyAt >= 120) {
+			this.lastContentNotifyAt = performance.now();
+			this.onContentChanged?.();
+		}
 	};
 
 	private readonly onPointerUp = (event: PointerEvent): void => {
@@ -127,6 +134,8 @@ export class HandwritingCanvas {
 		this.activePointerId = null;
 		this.ctx.closePath();
 		this.canvas.releasePointerCapture(event.pointerId);
+		this.lastContentNotifyAt = performance.now();
+		this.onContentChanged?.();
 	};
 
 	private getPoint(event: PointerEvent): { x: number; y: number } {

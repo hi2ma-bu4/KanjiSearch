@@ -2649,7 +2649,8 @@ var PpocrRecognizer = class {
   session = null;
   dictionary = [];
   inputHeight = 48;
-  minInputWidth = 48;
+  preferredInputWidth = 320;
+  maxInputWidth = 640;
   async initialize(manifest, modelBuffer, dictionary) {
     Y.wasm.numThreads = 1;
     Y.wasm.proxy = false;
@@ -2658,6 +2659,8 @@ var PpocrRecognizer = class {
       wasm: manifest.wasmBinaryUrl
     };
     this.dictionary = dictionary;
+    this.preferredInputWidth = manifest.preferredInputWidth;
+    this.maxInputWidth = Math.max(manifest.preferredInputWidth, manifest.maxInputWidth);
     this.session = await ts.create(modelBuffer, {
       executionProviders: ["wasm"]
     });
@@ -2668,7 +2671,8 @@ var PpocrRecognizer = class {
         this.inputHeight = modelHeight;
       }
       if (typeof modelWidth === "number" && modelWidth > 0) {
-        this.minInputWidth = modelWidth;
+        this.preferredInputWidth = modelWidth;
+        this.maxInputWidth = modelWidth;
       }
     }
   }
@@ -2680,7 +2684,12 @@ var PpocrRecognizer = class {
     const segments = segmentIntoLines(imageData);
     const lines = [];
     for (const segment of segments) {
-      const input = preprocessForRecognition(segment.imageData, this.inputHeight, this.minInputWidth);
+      const input = preprocessForRecognition(
+        segment.imageData,
+        this.inputHeight,
+        this.preferredInputWidth,
+        this.maxInputWidth
+      );
       const tensor = new de("float32", input.data, input.dims);
       const outputs = await this.session.run({
         [this.session.inputNames[0]]: tensor
@@ -2824,9 +2833,10 @@ function createInkMask(imageData) {
   }
   return mask;
 }
-function preprocessForRecognition(imageData, targetHeight, minInputWidth) {
+function preprocessForRecognition(imageData, targetHeight, preferredInputWidth, maxInputWidth) {
   const aspect = imageData.width / Math.max(1, imageData.height);
-  const targetWidth = clamp(Math.ceil(targetHeight * aspect), minInputWidth, 512);
+  const resizedWidth = clamp(Math.ceil(targetHeight * aspect), 1, maxInputWidth);
+  const targetWidth = clamp(Math.max(preferredInputWidth, resizedWidth), preferredInputWidth, maxInputWidth);
   const inputCanvas = new OffscreenCanvas(imageData.width, imageData.height);
   const inputContext = inputCanvas.getContext("2d");
   if (!inputContext) {
@@ -2838,9 +2848,10 @@ function preprocessForRecognition(imageData, targetHeight, minInputWidth) {
   if (!outputContext) {
     throw new Error("OffscreenCanvas 2D context is not available.");
   }
+  outputContext.imageSmoothingEnabled = true;
   outputContext.fillStyle = "#ffffff";
   outputContext.fillRect(0, 0, targetWidth, targetHeight);
-  outputContext.drawImage(inputCanvas, 0, 0, targetWidth, targetHeight);
+  outputContext.drawImage(inputCanvas, 0, 0, resizedWidth, targetHeight);
   const resized = outputContext.getImageData(0, 0, targetWidth, targetHeight).data;
   const tensor = new Float32Array(3 * targetHeight * targetWidth);
   for (let y = 0; y < targetHeight; y += 1) {

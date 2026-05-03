@@ -286,6 +286,14 @@ body::before {
   background: var(--surface-strong);
   border: 1px solid rgba(82, 58, 25, 0.12);
 }
+.result-card-preview {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 248, 236, 0.98),
+      rgba(255, 252, 246, 0.96));
+  border-color: rgba(138, 59, 18, 0.16);
+}
 .result-label {
   margin: 0 0 10px;
   font-size: 0.84rem;
@@ -305,6 +313,10 @@ body::before {
   margin: 12px 0 0;
   color: var(--ink-soft);
   font-size: 0.92rem;
+}
+.result-text-preview {
+  min-height: 2lh;
+  font-size: 1.02rem;
 }
 .history-list {
   display: grid;
