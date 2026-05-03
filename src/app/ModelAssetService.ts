@@ -63,8 +63,14 @@ export class ModelAssetService {
 }
 
 function normalizeDictionary(rawText: string): string[] {
-  return rawText
+  const entries = rawText
     .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
     .filter(entry => entry.length > 0);
+
+  if (!entries.includes(' ')) {
+    entries.push(' ');
+  }
+
+  return entries;
 }

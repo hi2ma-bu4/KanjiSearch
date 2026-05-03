@@ -309,7 +309,11 @@ var ModelAssetService = class {
   }
 };
 function normalizeDictionary(rawText) {
-  return rawText.replace(/^\uFEFF/, "").split(/\r?\n/).filter((entry) => entry.length > 0);
+  const entries = rawText.replace(/^\uFEFF/, "").split(/\r?\n/).filter((entry) => entry.length > 0);
+  if (!entries.includes(" ")) {
+    entries.push(" ");
+  }
+  return entries;
 }
 
 // src/app/OcrWorkerClient.ts
@@ -395,7 +399,7 @@ var LIVE_PREVIEW_MANIFEST = {
   wasmModuleUrl: WASM_MODULE_URL,
   preferredInputWidth: 320,
   maxInputWidth: 640,
-  cacheVersion: "ppocrv5-mobile-ja-v1"
+  cacheVersion: "ppocrv5-mobile-ja-v2"
 };
 var ACCURATE_RECOGNITION_MANIFEST = {
   modelLabel: "PP-OCRv5 Server",
@@ -405,7 +409,7 @@ var ACCURATE_RECOGNITION_MANIFEST = {
   wasmModuleUrl: WASM_MODULE_URL,
   preferredInputWidth: 320,
   maxInputWidth: 640,
-  cacheVersion: "ppocrv5-ch-ja-server-v2"
+  cacheVersion: "ppocrv5-ch-ja-server-v3"
 };
 var HandwriteSearchApp = class {
   database = new AppDatabase();
@@ -475,7 +479,7 @@ var HandwriteSearchApp = class {
     this.modelBadge.className = "status-pill";
     this.modelBadge.textContent = "\u30E2\u30C7\u30EB: \u8EFD\u91CF PP-OCRv5 Mobile / \u9AD8\u7CBE\u5EA6 PP-OCRv5 Server";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T04:04:21.480Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T04:13:36.663Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }

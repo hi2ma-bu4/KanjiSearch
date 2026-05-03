@@ -19,7 +19,7 @@ const LIVE_PREVIEW_MANIFEST: AppModelManifest = {
   wasmModuleUrl: WASM_MODULE_URL,
   preferredInputWidth: 320,
   maxInputWidth: 640,
-  cacheVersion: 'ppocrv5-mobile-ja-v1',
+  cacheVersion: 'ppocrv5-mobile-ja-v2',
 };
 
 const ACCURATE_RECOGNITION_MANIFEST: AppModelManifest = {
@@ -30,7 +30,7 @@ const ACCURATE_RECOGNITION_MANIFEST: AppModelManifest = {
   wasmModuleUrl: WASM_MODULE_URL,
   preferredInputWidth: 320,
   maxInputWidth: 640,
-  cacheVersion: 'ppocrv5-ch-ja-server-v2',
+  cacheVersion: 'ppocrv5-ch-ja-server-v3',
 };
 
 interface RecognitionSelection {

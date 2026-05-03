@@ -2884,9 +2884,9 @@ function createInkMask(imageData) {
   return mask;
 }
 function preprocessForRecognition(imageData, targetHeight, preferredInputWidth, maxInputWidth) {
+  const targetWidth = clamp(preferredInputWidth, preferredInputWidth, maxInputWidth);
   const aspect = imageData.width / Math.max(1, imageData.height);
-  const resizedWidth = clamp(Math.ceil(targetHeight * aspect), 1, maxInputWidth);
-  const targetWidth = clamp(Math.max(preferredInputWidth, resizedWidth), preferredInputWidth, maxInputWidth);
+  const resizedWidth = clamp(Math.ceil(targetHeight * aspect), 1, targetWidth);
   const inputCanvas = new OffscreenCanvas(imageData.width, imageData.height);
   const inputContext = inputCanvas.getContext("2d");
   if (!inputContext) {
@@ -2899,18 +2899,20 @@ function preprocessForRecognition(imageData, targetHeight, preferredInputWidth, 
     throw new Error("OffscreenCanvas 2D context is not available.");
   }
   outputContext.imageSmoothingEnabled = true;
-  outputContext.fillStyle = "#ffffff";
-  outputContext.fillRect(0, 0, targetWidth, targetHeight);
+  outputContext.imageSmoothingQuality = "high";
+  outputContext.clearRect(0, 0, targetWidth, targetHeight);
   outputContext.drawImage(inputCanvas, 0, 0, resizedWidth, targetHeight);
   const resized = outputContext.getImageData(0, 0, targetWidth, targetHeight).data;
   const tensor = new Float32Array(3 * targetHeight * targetWidth);
   for (let y = 0; y < targetHeight; y += 1) {
     for (let x = 0; x < targetWidth; x += 1) {
       const pixelIndex = (y * targetWidth + x) * 4;
-      for (let channel = 0; channel < 3; channel += 1) {
-        const value = resized[pixelIndex + channel] / 255;
-        tensor[channel * targetHeight * targetWidth + y * targetWidth + x] = (value - 0.5) / 0.5;
-      }
+      const blue = resized[pixelIndex + 2] / 255;
+      const green = resized[pixelIndex + 1] / 255;
+      const red = resized[pixelIndex] / 255;
+      tensor[y * targetWidth + x] = (blue - 0.5) / 0.5;
+      tensor[targetHeight * targetWidth + y * targetWidth + x] = (green - 0.5) / 0.5;
+      tensor[2 * targetHeight * targetWidth + y * targetWidth + x] = (red - 0.5) / 0.5;
     }
   }
   return {
