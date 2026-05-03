@@ -4,6 +4,8 @@
 **/.serena/**
 **/_memo/**
 
+**/.cache/**/*.gz
+
 .DS_Store
 
 *.keras

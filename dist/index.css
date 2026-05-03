@@ -250,6 +250,80 @@ body {
   color: var(--ink-soft);
   line-height: 1.7;
 }
+.lookup-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 249, 241, 0.92);
+  border: 1px solid rgba(162, 74, 27, 0.1);
+}
+.lookup-label {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.lookup-note,
+.lookup-empty,
+.lookup-entry-title,
+.lookup-entry-line,
+.lookup-entry-note,
+.lookup-kanji-title {
+  margin: 0;
+}
+.lookup-note,
+.lookup-empty,
+.lookup-entry-line,
+.lookup-entry-note {
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+.lookup-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.lookup-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(162, 74, 27, 0.12);
+  font-weight: 600;
+}
+.lookup-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.lookup-grid-mixed {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.lookup-entry,
+.lookup-kanji-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(110, 76, 31, 0.08);
+}
+.lookup-entry-title {
+  font-weight: 700;
+  color: var(--ink);
+}
+.lookup-kanji-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+.lookup-subgrid {
+  display: grid;
+  gap: 8px;
+}
 .suggestion-list {
   display: flex;
   flex-wrap: wrap;

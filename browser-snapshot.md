@@ -1,0 +1,28 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - heading "漢字手書き検索ツール" [level=1] [ref=e4]
+    - paragraph [ref=e5]: 1〜4文字程度で書いてください。ひらがな、カタカナ、漢字に対応しています。
+    - paragraph [ref=e7]: 準備完了
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - heading "記入欄" [level=2] [ref=e11]
+        - paragraph [ref=e12]: 1〜4文字程度で書いてください。
+      - generic [ref=e15]:
+        - button "読み取り" [ref=e16] [cursor=pointer]
+        - button "クリア" [ref=e17] [cursor=pointer]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - heading "読み取り" [level=2] [ref=e20]
+        - paragraph [ref=e21]: 結果が誤っている場合は、下の候補を えらべます。
+      - generic [ref=e22]:
+        - paragraph [ref=e23]: 現在の予想
+        - generic [ref=e24]: "[未記入]"
+        - paragraph [ref=e32]: 書き始めるとここに表示されます。
+      - generic [ref=e25]:
+        - paragraph [ref=e26]: 結果
+        - generic [ref=e27]: "[未検出]"
+        - paragraph [ref=e28]: 「読み取り」の結果がここに表示されます。
+        - generic [ref=e29]:
+          - paragraph [ref=e30]: 辞書補助
+          - paragraph [ref=e31]: 読みから漢字候補、漢字から音読み・訓読みをここに表示します。

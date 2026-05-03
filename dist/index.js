@@ -529,14 +529,14 @@ function combineSuggestions(groups, limit = 8) {
     }
     suggestions = next.sort((left, right) => right.score - left.score).slice(0, limit);
   }
-  const unique = /* @__PURE__ */ new Map();
+  const unique2 = /* @__PURE__ */ new Map();
   for (const suggestion of suggestions) {
-    const existing = unique.get(suggestion.text);
+    const existing = unique2.get(suggestion.text);
     if (!existing || suggestion.score > existing.score) {
-      unique.set(suggestion.text, suggestion);
+      unique2.set(suggestion.text, suggestion);
     }
   }
-  return [...unique.values()].sort((left, right) => right.score - left.score);
+  return [...unique2.values()].sort((left, right) => right.score - left.score);
 }
 function groupComponentsIntoCharacters(components) {
   const sorted = [...components].sort((left, right) => left.left - right.left || left.top - right.top);
@@ -706,6 +706,232 @@ function profileDistance(left, right) {
   return total / left.length;
 }
 
+// src/app/LookupAnalyzer.ts
+function isHiragana(character) {
+  return /[\p{Script=Hiragana}ーゝゞ]/u.test(character);
+}
+function isKatakana(character) {
+  return /[\p{Script=Katakana}ーヽヾ]/u.test(character);
+}
+function isKana(character) {
+  return isHiragana(character) || isKatakana(character);
+}
+function isKanji(character) {
+  return /[\p{Script=Han}々〆〇ヶヵ]/u.test(character);
+}
+function isSupportedCharacter(character) {
+  return isKana(character) || isKanji(character);
+}
+function toHiragana(text) {
+  return [...text].map((character) => {
+    const codePoint = character.codePointAt(0);
+    if (codePoint && codePoint >= 12449 && codePoint <= 12534) {
+      return String.fromCodePoint(codePoint - 96);
+    }
+    return character;
+  }).join("");
+}
+function unique(values) {
+  return [...new Set(values)];
+}
+function lookupKanjiEntries(text, asset) {
+  const entries = [];
+  for (const character of [...text]) {
+    if (!isKanji(character)) {
+      continue;
+    }
+    const readings = asset.kanji[character];
+    entries.push({
+      kanji: character,
+      on: readings?.on ?? [],
+      kun: readings?.kun ?? [],
+      hasEntry: Boolean(readings)
+    });
+  }
+  return entries;
+}
+function createKanaSegment(text) {
+  return {
+    kind: "kana",
+    text,
+    readings: [],
+    entries: [],
+    note: "\u304B\u306A\u90E8\u5206\u3068\u3057\u3066\u6271\u3044\u307E\u3057\u305F\u3002"
+  };
+}
+function createUnsupportedSegment(text) {
+  return {
+    kind: "unsupported",
+    text,
+    readings: [],
+    entries: [],
+    note: "\u8A18\u53F7\u3084\u5224\u5225\u4E0D\u80FD\u306A\u6587\u5B57\u3068\u3057\u3066\u6271\u3044\u307E\u3057\u305F\u3002"
+  };
+}
+function createWordSegment(text, asset) {
+  return {
+    kind: "word",
+    text,
+    readings: asset.wordToReadings[text] ?? [],
+    entries: lookupKanjiEntries(text, asset),
+    note: void 0
+  };
+}
+function createKanjiSegment(text, asset) {
+  return {
+    kind: "kanji",
+    text,
+    readings: [],
+    entries: lookupKanjiEntries(text, asset),
+    note: void 0
+  };
+}
+function segmentMixedText(text, asset) {
+  const characters = [...text];
+  const segments = [];
+  let index = 0;
+  while (index < characters.length) {
+    const current = characters[index];
+    if (isKanji(current)) {
+      let value2 = current;
+      index += 1;
+      while (index < characters.length && isKanji(characters[index])) {
+        value2 += characters[index];
+        index += 1;
+      }
+      let consumedKana = false;
+      while (index < characters.length && isKana(characters[index])) {
+        value2 += characters[index];
+        index += 1;
+        consumedKana = true;
+      }
+      segments.push(consumedKana ? createWordSegment(value2, asset) : createKanjiSegment(value2, asset));
+      continue;
+    }
+    if (isKana(current)) {
+      let value2 = current;
+      index += 1;
+      while (index < characters.length && isKana(characters[index])) {
+        value2 += characters[index];
+        index += 1;
+      }
+      segments.push(createKanaSegment(value2));
+      continue;
+    }
+    let value = current;
+    index += 1;
+    while (index < characters.length && !isSupportedCharacter(characters[index])) {
+      value += characters[index];
+      index += 1;
+    }
+    segments.push(createUnsupportedSegment(value));
+  }
+  return segments;
+}
+function analyzeRecognizedText(text, asset) {
+  const normalizedText = text.replace(/\s+/gu, "");
+  if (!normalizedText) {
+    return {
+      kind: "unsupported",
+      text: normalizedText,
+      unsupportedText: "",
+      note: "\u8F9E\u66F8\u88DC\u52A9\u306B\u4F7F\u3048\u308B\u6587\u5B57\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002"
+    };
+  }
+  const characters = [...normalizedText];
+  const unsupportedCharacters = characters.filter((character) => !isSupportedCharacter(character));
+  const allHiragana = characters.every((character) => isHiragana(character));
+  const allKatakana = characters.every((character) => isKatakana(character));
+  const allKanji = characters.every((character) => isKanji(character));
+  if (allHiragana || allKatakana) {
+    const normalizedReading = toHiragana(normalizedText);
+    return {
+      kind: "reading",
+      text: normalizedText,
+      normalizedReading,
+      words: asset.readingToWords[normalizedReading] ?? [],
+      note: allKatakana ? "\u7247\u4EEE\u540D\u306F\u8AAD\u307F\u3068\u3057\u3066\u6271\u3044\u3001\u3072\u3089\u304C\u306A\u306B\u76F4\u3057\u3066\u691C\u7D22\u3057\u307E\u3057\u305F\u3002" : void 0
+    };
+  }
+  if (allKanji) {
+    return {
+      kind: "kanji",
+      text: normalizedText,
+      entries: lookupKanjiEntries(normalizedText, asset)
+    };
+  }
+  const segments = segmentMixedText(normalizedText, asset);
+  const supportedSegmentCount = segments.filter((segment) => segment.kind !== "unsupported").length;
+  if (supportedSegmentCount === 0) {
+    return {
+      kind: "unsupported",
+      text: normalizedText,
+      unsupportedText: unique(unsupportedCharacters).join(" "),
+      note: "\u8A18\u53F7\u306E\u307F\u3060\u3063\u305F\u305F\u3081\u3001\u8F9E\u66F8\u88DC\u52A9\u306F\u8868\u793A\u3067\u304D\u307E\u305B\u3093\u3002"
+    };
+  }
+  return {
+    kind: "mixed",
+    text: normalizedText,
+    segments,
+    note: unsupportedCharacters.length > 0 ? `\u6DF7\u5728\u3057\u3066\u3044\u305F\u305F\u3081\u5206\u5272\u3057\u3066\u6271\u3044\u307E\u3057\u305F\u3002\u8A18\u53F7\u306A\u3069\u306F\u5BFE\u8C61\u5916\u3067\u3059: ${unique(unsupportedCharacters).join(" ")}` : "\u6DF7\u5728\u3057\u3066\u3044\u305F\u305F\u3081\u3001\u9001\u308A\u4EEE\u540D\u3068\u3057\u3066\u6271\u3046\u304B\u5206\u5272\u3057\u3066\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002"
+  };
+}
+
+// src/app/LookupAssetService.ts
+function parseLookupAsset(text) {
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("\u8F9E\u66F8\u30C7\u30FC\u30BF\u306E\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059\u3002");
+  }
+  if (!parsed.readingToWords || !parsed.wordToReadings || !parsed.kanji) {
+    throw new Error("\u8F9E\u66F8\u30C7\u30FC\u30BF\u306B\u5FC5\u8981\u306A\u9805\u76EE\u304C\u4E0D\u8DB3\u3057\u3066\u3044\u307E\u3059\u3002");
+  }
+  return {
+    metadata: parsed.metadata ?? {
+      generatedAt: "",
+      sources: []
+    },
+    readingToWords: parsed.readingToWords,
+    wordToReadings: parsed.wordToReadings,
+    kanji: parsed.kanji
+  };
+}
+var LookupAssetService = class {
+  constructor(database, assetUrl, cacheVersion) {
+    this.database = database;
+    this.assetUrl = assetUrl;
+    this.cacheVersion = cacheVersion;
+  }
+  database;
+  assetUrl;
+  cacheVersion;
+  async getLookupAsset(onProgress) {
+    const cacheKey = `${this.cacheVersion}:lookup`;
+    const cached = await this.database.getCachedAsset(cacheKey, this.cacheVersion);
+    if (cached?.kind === "text" && typeof cached.value === "string") {
+      onProgress?.("\u8F9E\u66F8\u88DC\u52A9\u30C7\u30FC\u30BF\u3092IndexedDB\u304B\u3089\u8AAD\u307F\u8FBC\u307F\u307E\u3057\u305F\u3002");
+      return parseLookupAsset(cached.value);
+    }
+    onProgress?.("\u8F9E\u66F8\u88DC\u52A9\u30C7\u30FC\u30BF\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u3002");
+    const response = await fetch(this.assetUrl);
+    if (!response.ok) {
+      throw new Error(`\u8F9E\u66F8\u88DC\u52A9\u30C7\u30FC\u30BF\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${response.status}`);
+    }
+    const text = await response.text();
+    const record = {
+      key: cacheKey,
+      kind: "text",
+      version: this.cacheVersion,
+      value: text,
+      contentType: "application/json; charset=utf-8",
+      cachedAt: Date.now()
+    };
+    await this.database.cacheAsset(record);
+    return parseLookupAsset(text);
+  }
+};
+
 // src/app/ModelAssetService.ts
 var ModelAssetService = class {
   constructor(database, manifest) {
@@ -873,11 +1099,15 @@ var HANDWRITTEN_CLASSIFIER_MANIFEST = {
   wasmModuleUrl: WASM_MODULE_URL,
   cacheVersion: "kanjidnn-ja-v1"
 };
+var LOOKUP_ASSET_URL = new URL("./assets/lookup/japanese-lookup.json", import.meta.url).toString();
+var LOOKUP_CACHE_VERSION = "edrdg-short-lookup-2026-05-03-v1";
+var LOOKUP_PLACEHOLDER_MESSAGE = "\u8AAD\u307F\u304B\u3089\u6F22\u5B57\u5019\u88DC\u3001\u6F22\u5B57\u304B\u3089\u97F3\u8AAD\u307F\u30FB\u8A13\u8AAD\u307F\u3092\u3053\u3053\u306B\u8868\u793A\u3057\u307E\u3059\u3002";
 var HandwriteSearchApp = class {
   database = new AppDatabase();
   previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
   accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
   classifierAssets = new ClassifierAssetService(this.database, HANDWRITTEN_CLASSIFIER_MANIFEST);
+  lookupAssets = new LookupAssetService(this.database, LOOKUP_ASSET_URL, LOOKUP_CACHE_VERSION);
   kanaRecognizer = new KanaTemplateRecognizer();
   previewWorker = new OcrWorkerClient();
   accurateWorker = new OcrWorkerClient();
@@ -892,8 +1122,11 @@ var HandwriteSearchApp = class {
   previewMeta = document.createElement("p");
   resultText = document.createElement("pre");
   resultMeta = document.createElement("p");
+  lookupDetails = document.createElement("div");
   suggestionList = document.createElement("div");
   currentResult = null;
+  lookupAsset = null;
+  lookupReadyPromise = null;
   previewReady = false;
   accurateReady = false;
   classifierReady = false;
@@ -949,11 +1182,13 @@ var HandwriteSearchApp = class {
     this.previewMeta.className = "result-note";
     this.previewMeta.textContent = "";
     const finalCard = div("result-box");
-    finalCard.append(label("box-label", "\u7D50\u679C"), this.resultText, this.resultMeta, this.suggestionList);
+    finalCard.append(label("box-label", "\u7D50\u679C"), this.resultText, this.resultMeta, this.lookupDetails, this.suggestionList);
     this.resultText.className = "result-text";
     this.resultText.textContent = "[\u672A\u691C\u51FA]";
     this.resultMeta.className = "result-note";
     this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
+    this.lookupDetails.className = "lookup-panel";
+    this.renderLookupPlaceholder(LOOKUP_PLACEHOLDER_MESSAGE);
     this.suggestionList.className = "suggestion-list";
     panel.append(panelHeading("\u8AAD\u307F\u53D6\u308A", "\u7D50\u679C\u304C\u8AA4\u3063\u3066\u3044\u308B\u5834\u5408\u306F\u3001\u4E0B\u306E\u5019\u88DC\u3092 \u3048\u3089\u3079\u307E\u3059\u3002"), previewCard, finalCard);
     return panel;
@@ -969,9 +1204,7 @@ var HandwriteSearchApp = class {
       this.previewGeneration += 1;
       this.previewText.textContent = "[\u672A\u8A18\u5165]";
       this.previewMeta.textContent = "\u66F8\u304D\u59CB\u3081\u308B\u3068\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
-      this.resultText.textContent = "[\u672A\u691C\u51FA]";
-      this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
-      this.renderSuggestions([]);
+      this.resetResultDisplay();
       this.setStatus("\u30AF\u30EA\u30A2\u3057\u307E\u3057\u305F\u3002\u3082\u3046\u4E00\u5EA6 \u66F8\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
     });
   }
@@ -987,6 +1220,9 @@ var HandwriteSearchApp = class {
       this.setStatus("\u6E96\u5099\u5B8C\u4E86");
       void this.prepareAccurateRecognizer().catch(() => void 0);
       void this.prepareHandwrittenClassifier().catch(() => void 0);
+      void this.prepareLookupAsset().catch((error) => {
+        console.error(error);
+      });
     } catch (error) {
       console.error(error);
       this.setStatus(`\u8D77\u52D5\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
@@ -1030,9 +1266,7 @@ var HandwriteSearchApp = class {
   }
   handleCanvasChanged() {
     this.currentResult = null;
-    this.resultText.textContent = "[\u672A\u691C\u51FA]";
-    this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
-    this.renderSuggestions([]);
+    this.resetResultDisplay();
     if (this.canvasController.strokeCount === 0) {
       this.previewText.textContent = "[\u672A\u8A18\u5165]";
       this.previewMeta.textContent = "\u66F8\u304D\u59CB\u3081\u308B\u3068\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
@@ -1127,9 +1361,8 @@ var HandwriteSearchApp = class {
       this.previewText.textContent = kanaResult?.text || previewResult.text || "\u691C\u51FA\u5931\u6557";
       this.previewMeta.textContent = kanaResult ? "\u4EEE\u540D\u3068\u3057\u3066\u691C\u51FA" : "\u691C\u51FA\u3057\u307E\u3057\u305F";
       const finalText = selection.result.text || "\u691C\u51FA\u5931\u6557";
-      this.resultText.textContent = finalText;
-      this.resultMeta.textContent = buildFinalMessage(finalText, suggestions.length);
       this.renderSuggestions(suggestions);
+      await this.applyDisplayedResult(finalText, buildFinalMessage(finalText, suggestions.length));
       this.setStatus(finalText === "\u691C\u51FA\u5931\u6557" ? "\u3082\u3046\u4E00\u5EA6\u66F8\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u691C\u51FA\u3057\u307E\u3057\u305F\u3002");
     } catch (error) {
       console.error(error);
@@ -1145,6 +1378,92 @@ var HandwriteSearchApp = class {
   setStatus(message) {
     this.statusLabel.textContent = message;
   }
+  resetResultDisplay() {
+    this.resultText.textContent = "[\u672A\u691C\u51FA]";
+    this.resultMeta.textContent = "\u300C\u8AAD\u307F\u53D6\u308A\u300D\u306E\u7D50\u679C\u304C\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059\u3002";
+    this.renderLookupPlaceholder(LOOKUP_PLACEHOLDER_MESSAGE);
+    this.renderSuggestions([]);
+  }
+  async applyDisplayedResult(text, message) {
+    this.resultText.textContent = text;
+    this.resultMeta.textContent = message;
+    await this.renderLookupDetailsForText(text);
+  }
+  async prepareLookupAsset() {
+    if (this.lookupAsset) {
+      return this.lookupAsset;
+    }
+    if (this.lookupReadyPromise) {
+      return await this.lookupReadyPromise;
+    }
+    this.lookupReadyPromise = this.lookupAssets.getLookupAsset().then((asset) => {
+      this.lookupAsset = asset;
+      return asset;
+    }).catch((error) => {
+      this.lookupReadyPromise = null;
+      throw error;
+    });
+    return await this.lookupReadyPromise;
+  }
+  async renderLookupDetailsForText(text) {
+    if (!text || text === "\u691C\u51FA\u5931\u6557") {
+      this.renderLookupPlaceholder("\u8A8D\u8B58\u306B\u5931\u6557\u3057\u305F\u305F\u3081\u3001\u8F9E\u66F8\u88DC\u52A9\u306F\u8868\u793A\u3057\u3066\u3044\u307E\u305B\u3093\u3002");
+      return;
+    }
+    const requestedText = text;
+    this.renderLookupPlaceholder(`\u300C${requestedText}\u300D\u306E\u8F9E\u66F8\u88DC\u52A9\u3092\u8ABF\u3079\u3066\u3044\u307E\u3059...`);
+    try {
+      const asset = await this.prepareLookupAsset();
+      if (this.resultText.textContent !== requestedText) {
+        return;
+      }
+      const analysis = analyzeRecognizedText(requestedText, asset);
+      this.renderLookupAnalysis(analysis);
+    } catch (error) {
+      console.error(error);
+      if (this.resultText.textContent === requestedText) {
+        this.renderLookupPlaceholder("\u8F9E\u66F8\u88DC\u52A9\u30C7\u30FC\u30BF\u306E\u8AAD\u307F\u8FBC\u307F\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
+      }
+    }
+  }
+  renderLookupPlaceholder(message) {
+    this.lookupDetails.replaceChildren(label("lookup-label", "\u8F9E\u66F8\u88DC\u52A9"), paragraph("lookup-note", message));
+  }
+  renderLookupAnalysis(analysis) {
+    this.lookupDetails.replaceChildren();
+    this.lookupDetails.append(label("lookup-label", "\u8F9E\u66F8\u88DC\u52A9"));
+    switch (analysis.kind) {
+      case "reading": {
+        this.lookupDetails.append(paragraph("lookup-note", `\u300C${analysis.normalizedReading}\u300D\u3068\u3044\u3046\u8AAD\u307F\u306E\u6F22\u5B57\u5019\u88DC\u3067\u3059\u3002`));
+        if (analysis.words.length === 0) {
+          this.lookupDetails.append(paragraph("lookup-empty", "\u4E00\u81F4\u3059\u308B\u6F22\u5B57\u5019\u88DC\u306F\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002"));
+        } else {
+          this.lookupDetails.append(buildLookupWordList(analysis.words));
+        }
+        if (analysis.note) {
+          this.lookupDetails.append(paragraph("lookup-note", analysis.note));
+        }
+        return;
+      }
+      case "kanji": {
+        this.lookupDetails.append(paragraph("lookup-note", "\u6F22\u5B57\u3054\u3068\u306E\u97F3\u8AAD\u307F\u30FB\u8A13\u8AAD\u307F\u3067\u3059\u3002"));
+        this.lookupDetails.append(buildLookupKanjiGrid(analysis.entries));
+        return;
+      }
+      case "mixed": {
+        this.lookupDetails.append(paragraph("lookup-note", analysis.note ?? "\u6DF7\u5728\u3057\u3066\u3044\u305F\u305F\u3081\u3001\u9001\u308A\u4EEE\u540D\u3068\u3057\u3066\u6271\u3046\u304B\u5206\u5272\u3057\u3066\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002"));
+        this.lookupDetails.append(buildLookupSegmentGrid(analysis.segments));
+        return;
+      }
+      case "unsupported": {
+        this.lookupDetails.append(paragraph("lookup-note", analysis.note));
+        if (analysis.unsupportedText) {
+          this.lookupDetails.append(paragraph("lookup-empty", `\u5BFE\u8C61\u5916\u306E\u6587\u5B57: ${analysis.unsupportedText}`));
+        }
+        return;
+      }
+    }
+  }
   renderSuggestions(suggestions) {
     this.suggestionList.replaceChildren();
     if (suggestions.length === 0) {
@@ -1159,13 +1478,68 @@ var HandwriteSearchApp = class {
       chip.textContent = suggestion.text;
       chip.title = suggestion.source;
       chip.addEventListener("click", () => {
-        this.resultText.textContent = suggestion.text;
-        this.resultMeta.textContent = "\u9078\u629E\u3057\u305F\u5019\u88DC\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002";
+        void this.applyDisplayedResult(suggestion.text, "\u9078\u629E\u3057\u305F\u5019\u88DC\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002");
       });
       this.suggestionList.append(chip);
     }
   }
 };
+function buildLookupWordList(words) {
+  const list = div("lookup-chip-list");
+  for (const word of words) {
+    const item = document.createElement("span");
+    item.className = "lookup-chip";
+    item.textContent = word;
+    list.append(item);
+  }
+  return list;
+}
+function buildLookupKanjiGrid(entries) {
+  const grid = div("lookup-grid");
+  for (const entry of entries) {
+    grid.append(buildLookupKanjiCard(entry));
+  }
+  return grid;
+}
+function buildLookupSegmentGrid(segments) {
+  const grid = div("lookup-grid lookup-grid-mixed");
+  for (const segment of segments) {
+    const card = div("lookup-entry");
+    card.append(paragraph("lookup-entry-title", `\u300C${segment.text}\u300D`));
+    if (segment.kind === "kana" || segment.kind === "unsupported") {
+      card.append(paragraph("lookup-entry-note", segment.note ?? "\u3053\u306E\u90E8\u5206\u306F\u8F9E\u66F8\u88DC\u52A9\u306E\u5BFE\u8C61\u5916\u3067\u3059\u3002"));
+      grid.append(card);
+      continue;
+    }
+    if (segment.readings.length > 0) {
+      card.append(paragraph("lookup-entry-line", `\u8AAD\u307F: ${segment.readings.slice(0, 6).join("\u3001")}`));
+    } else if (segment.kind === "word") {
+      card.append(paragraph("lookup-entry-note", "\u4E00\u81F4\u3059\u308B\u9001\u308A\u4EEE\u540D\u4ED8\u304D\u306E\u8AAD\u307F\u306F\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002"));
+    }
+    if (segment.entries.length > 0) {
+      const subGrid = div("lookup-subgrid");
+      for (const entry of segment.entries) {
+        subGrid.append(buildLookupKanjiCard(entry));
+      }
+      card.append(subGrid);
+    } else if (segment.kind === "kanji") {
+      card.append(paragraph("lookup-entry-note", "\u6F22\u5B57\u306E\u8AAD\u307F\u30C7\u30FC\u30BF\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002"));
+    }
+    grid.append(card);
+  }
+  return grid;
+}
+function buildLookupKanjiCard(entry) {
+  const card = div("lookup-kanji-card");
+  card.append(paragraph("lookup-kanji-title", entry.kanji));
+  if (!entry.hasEntry) {
+    card.append(paragraph("lookup-entry-note", "\u8F9E\u66F8\u30C7\u30FC\u30BF\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002"));
+    return card;
+  }
+  card.append(paragraph("lookup-entry-line", `\u97F3: ${entry.on.length > 0 ? entry.on.join("\u3001") : "\u306A\u3057"}`));
+  card.append(paragraph("lookup-entry-line", `\u8A13: ${entry.kun.length > 0 ? entry.kun.join("\u3001") : "\u306A\u3057"}`));
+  return card;
+}
 function selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult) {
   const candidates = [
     {

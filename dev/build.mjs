@@ -26,6 +26,11 @@ async function copyStaticAssets() {
     path.join(distDir, 'assets', 'handwritten', 'kanjidnn'),
     { recursive: true }
   );
+  await cp(
+    path.join(projectRoot, 'build', 'lookup'),
+    path.join(distDir, 'assets', 'lookup'),
+    { recursive: true }
+  );
   const ortDistDir = path.join(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
   const ortTargetDir = path.join(distDir, 'vendor', 'onnxruntime');
   await mkdir(ortTargetDir, { recursive: true });

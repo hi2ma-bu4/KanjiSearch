@@ -5,9 +5,11 @@ import { ClassifierAssetService } from "./ClassifierAssetService";
 import { HandwritingCanvas } from "./HandwritingCanvas";
 import { HandwrittenClassifierClient } from "./HandwrittenClassifierClient";
 import { KanaTemplateRecognizer, type KanaRecognitionResult } from "./KanaTemplateRecognizer";
+import { analyzeRecognizedText } from "./LookupAnalyzer";
+import { LookupAssetService } from "./LookupAssetService";
 import { ModelAssetService } from "./ModelAssetService";
 import { OcrWorkerClient } from "./OcrWorkerClient";
-import type { AppClassifierManifest, AppModelManifest, HandwrittenRecognitionResult, OcrLineResult, OcrResult } from "./types";
+import type { AppClassifierManifest, AppModelManifest, HandwrittenRecognitionResult, JapaneseLookupAsset, LookupAnalysis, LookupKanjiEntry, LookupMixedSegment, OcrLineResult, OcrResult } from "./types";
 
 const WASM_BINARY_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString();
 const WASM_MODULE_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.mjs", import.meta.url).toString();
@@ -42,6 +44,10 @@ const HANDWRITTEN_CLASSIFIER_MANIFEST: AppClassifierManifest = {
 	cacheVersion: "kanjidnn-ja-v1",
 };
 
+const LOOKUP_ASSET_URL = new URL("./assets/lookup/japanese-lookup.json", import.meta.url).toString();
+const LOOKUP_CACHE_VERSION = "edrdg-short-lookup-2026-05-03-v1";
+const LOOKUP_PLACEHOLDER_MESSAGE = "読みから漢字候補、漢字から音読み・訓読みをここに表示します。";
+
 interface RecognitionSelection {
 	label: string;
 	result: OcrResult;
@@ -59,6 +65,7 @@ export class HandwriteSearchApp {
 	private readonly previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
 	private readonly accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
 	private readonly classifierAssets = new ClassifierAssetService(this.database, HANDWRITTEN_CLASSIFIER_MANIFEST);
+	private readonly lookupAssets = new LookupAssetService(this.database, LOOKUP_ASSET_URL, LOOKUP_CACHE_VERSION);
 	private readonly kanaRecognizer = new KanaTemplateRecognizer();
 	private readonly previewWorker = new OcrWorkerClient();
 	private readonly accurateWorker = new OcrWorkerClient();
@@ -73,8 +80,11 @@ export class HandwriteSearchApp {
 	private readonly previewMeta = document.createElement("p");
 	private readonly resultText = document.createElement("pre");
 	private readonly resultMeta = document.createElement("p");
+	private readonly lookupDetails = document.createElement("div");
 	private readonly suggestionList = document.createElement("div");
 	private currentResult: OcrResult | null = null;
+	private lookupAsset: JapaneseLookupAsset | null = null;
+	private lookupReadyPromise: Promise<JapaneseLookupAsset> | null = null;
 	private previewReady = false;
 	private accurateReady = false;
 	private classifierReady = false;
@@ -142,11 +152,13 @@ export class HandwriteSearchApp {
 		this.previewMeta.textContent = "";
 
 		const finalCard = div("result-box");
-		finalCard.append(label("box-label", "結果"), this.resultText, this.resultMeta, this.suggestionList);
+		finalCard.append(label("box-label", "結果"), this.resultText, this.resultMeta, this.lookupDetails, this.suggestionList);
 		this.resultText.className = "result-text";
 		this.resultText.textContent = "[未検出]";
 		this.resultMeta.className = "result-note";
 		this.resultMeta.textContent = "「読み取り」の結果がここに表示されます。";
+		this.lookupDetails.className = "lookup-panel";
+		this.renderLookupPlaceholder(LOOKUP_PLACEHOLDER_MESSAGE);
 		this.suggestionList.className = "suggestion-list";
 
 		panel.append(panelHeading("読み取り", "結果が誤っている場合は、下の候補を えらべます。"), previewCard, finalCard);
@@ -166,9 +178,7 @@ export class HandwriteSearchApp {
 			this.previewGeneration += 1;
 			this.previewText.textContent = "[未記入]";
 			this.previewMeta.textContent = "書き始めるとここに表示されます。";
-			this.resultText.textContent = "[未検出]";
-			this.resultMeta.textContent = "「読み取り」の結果がここに表示されます。";
-			this.renderSuggestions([]);
+			this.resetResultDisplay();
 			this.setStatus("クリアしました。もう一度 書いてください。");
 		});
 	}
@@ -185,6 +195,9 @@ export class HandwriteSearchApp {
 			this.setStatus("準備完了");
 			void this.prepareAccurateRecognizer().catch(() => undefined);
 			void this.prepareHandwrittenClassifier().catch(() => undefined);
+			void this.prepareLookupAsset().catch((error) => {
+				console.error(error);
+			});
 		} catch (error) {
 			console.error(error);
 			this.setStatus(`起動に失敗しました: ${(error as Error).message}`);
@@ -235,9 +248,7 @@ export class HandwriteSearchApp {
 
 	private handleCanvasChanged(): void {
 		this.currentResult = null;
-		this.resultText.textContent = "[未検出]";
-		this.resultMeta.textContent = "「読み取り」の結果がここに表示されます。";
-		this.renderSuggestions([]);
+		this.resetResultDisplay();
 
 		if (this.canvasController.strokeCount === 0) {
 			this.previewText.textContent = "[未記入]";
@@ -352,9 +363,8 @@ export class HandwriteSearchApp {
 			this.previewMeta.textContent = kanaResult ? "仮名として検出" : "検出しました";
 
 			const finalText = selection.result.text || "検出失敗";
-			this.resultText.textContent = finalText;
-			this.resultMeta.textContent = buildFinalMessage(finalText, suggestions.length);
 			this.renderSuggestions(suggestions);
+			await this.applyDisplayedResult(finalText, buildFinalMessage(finalText, suggestions.length));
 			this.setStatus(finalText === "検出失敗" ? "もう一度書いてみてください。" : "検出しました。");
 		} catch (error) {
 			console.error(error);
@@ -373,6 +383,108 @@ export class HandwriteSearchApp {
 		this.statusLabel.textContent = message;
 	}
 
+	private resetResultDisplay(): void {
+		this.resultText.textContent = "[未検出]";
+		this.resultMeta.textContent = "「読み取り」の結果がここに表示されます。";
+		this.renderLookupPlaceholder(LOOKUP_PLACEHOLDER_MESSAGE);
+		this.renderSuggestions([]);
+	}
+
+	private async applyDisplayedResult(text: string, message: string): Promise<void> {
+		this.resultText.textContent = text;
+		this.resultMeta.textContent = message;
+		await this.renderLookupDetailsForText(text);
+	}
+
+	private async prepareLookupAsset(): Promise<JapaneseLookupAsset> {
+		if (this.lookupAsset) {
+			return this.lookupAsset;
+		}
+
+		if (this.lookupReadyPromise) {
+			return await this.lookupReadyPromise;
+		}
+
+		this.lookupReadyPromise = this.lookupAssets
+			.getLookupAsset()
+			.then((asset) => {
+				this.lookupAsset = asset;
+				return asset;
+			})
+			.catch((error) => {
+				this.lookupReadyPromise = null;
+				throw error;
+			});
+
+		return await this.lookupReadyPromise;
+	}
+
+	private async renderLookupDetailsForText(text: string): Promise<void> {
+		if (!text || text === "検出失敗") {
+			this.renderLookupPlaceholder("認識に失敗したため、辞書補助は表示していません。");
+			return;
+		}
+
+		const requestedText = text;
+		this.renderLookupPlaceholder(`「${requestedText}」の辞書補助を調べています...`);
+
+		try {
+			const asset = await this.prepareLookupAsset();
+			if (this.resultText.textContent !== requestedText) {
+				return;
+			}
+
+			const analysis = analyzeRecognizedText(requestedText, asset);
+			this.renderLookupAnalysis(analysis);
+		} catch (error) {
+			console.error(error);
+			if (this.resultText.textContent === requestedText) {
+				this.renderLookupPlaceholder("辞書補助データの読み込みに失敗しました。");
+			}
+		}
+	}
+
+	private renderLookupPlaceholder(message: string): void {
+		this.lookupDetails.replaceChildren(label("lookup-label", "辞書補助"), paragraph("lookup-note", message));
+	}
+
+	private renderLookupAnalysis(analysis: LookupAnalysis): void {
+		this.lookupDetails.replaceChildren();
+		this.lookupDetails.append(label("lookup-label", "辞書補助"));
+
+		switch (analysis.kind) {
+			case "reading": {
+				this.lookupDetails.append(paragraph("lookup-note", `「${analysis.normalizedReading}」という読みの漢字候補です。`));
+				if (analysis.words.length === 0) {
+					this.lookupDetails.append(paragraph("lookup-empty", "一致する漢字候補は見つかりませんでした。"));
+				} else {
+					this.lookupDetails.append(buildLookupWordList(analysis.words));
+				}
+				if (analysis.note) {
+					this.lookupDetails.append(paragraph("lookup-note", analysis.note));
+				}
+				return;
+			}
+			case "kanji": {
+				this.lookupDetails.append(paragraph("lookup-note", "漢字ごとの音読み・訓読みです。"));
+				this.lookupDetails.append(buildLookupKanjiGrid(analysis.entries));
+				return;
+			}
+			case "mixed": {
+				this.lookupDetails.append(paragraph("lookup-note", analysis.note ?? "混在していたため、送り仮名として扱うか分割して表示しています。"));
+				this.lookupDetails.append(buildLookupSegmentGrid(analysis.segments));
+				return;
+			}
+			case "unsupported": {
+				this.lookupDetails.append(paragraph("lookup-note", analysis.note));
+				if (analysis.unsupportedText) {
+					this.lookupDetails.append(paragraph("lookup-empty", `対象外の文字: ${analysis.unsupportedText}`));
+				}
+				return;
+			}
+		}
+	}
+
 	private renderSuggestions(suggestions: RecognitionSuggestion[]): void {
 		this.suggestionList.replaceChildren();
 		if (suggestions.length === 0) {
@@ -389,12 +501,77 @@ export class HandwriteSearchApp {
 			chip.textContent = suggestion.text;
 			chip.title = suggestion.source;
 			chip.addEventListener("click", () => {
-				this.resultText.textContent = suggestion.text;
-				this.resultMeta.textContent = "選択した候補を表示しています。";
+				void this.applyDisplayedResult(suggestion.text, "選択した候補を表示しています。");
 			});
 			this.suggestionList.append(chip);
 		}
 	}
+}
+
+function buildLookupWordList(words: string[]): HTMLElement {
+	const list = div("lookup-chip-list");
+	for (const word of words) {
+		const item = document.createElement("span");
+		item.className = "lookup-chip";
+		item.textContent = word;
+		list.append(item);
+	}
+	return list;
+}
+
+function buildLookupKanjiGrid(entries: LookupKanjiEntry[]): HTMLElement {
+	const grid = div("lookup-grid");
+	for (const entry of entries) {
+		grid.append(buildLookupKanjiCard(entry));
+	}
+	return grid;
+}
+
+function buildLookupSegmentGrid(segments: LookupMixedSegment[]): HTMLElement {
+	const grid = div("lookup-grid lookup-grid-mixed");
+	for (const segment of segments) {
+		const card = div("lookup-entry");
+		card.append(paragraph("lookup-entry-title", `「${segment.text}」`));
+
+		if (segment.kind === "kana" || segment.kind === "unsupported") {
+			card.append(paragraph("lookup-entry-note", segment.note ?? "この部分は辞書補助の対象外です。"));
+			grid.append(card);
+			continue;
+		}
+
+		if (segment.readings.length > 0) {
+			card.append(paragraph("lookup-entry-line", `読み: ${segment.readings.slice(0, 6).join("、")}`));
+		} else if (segment.kind === "word") {
+			card.append(paragraph("lookup-entry-note", "一致する送り仮名付きの読みは見つかりませんでした。"));
+		}
+
+		if (segment.entries.length > 0) {
+			const subGrid = div("lookup-subgrid");
+			for (const entry of segment.entries) {
+				subGrid.append(buildLookupKanjiCard(entry));
+			}
+			card.append(subGrid);
+		} else if (segment.kind === "kanji") {
+			card.append(paragraph("lookup-entry-note", "漢字の読みデータが見つかりませんでした。"));
+		}
+
+		grid.append(card);
+	}
+	return grid;
+}
+
+function buildLookupKanjiCard(entry: LookupKanjiEntry): HTMLElement {
+	const card = div("lookup-kanji-card");
+	card.append(paragraph("lookup-kanji-title", entry.kanji));
+
+	if (!entry.hasEntry) {
+		card.append(paragraph("lookup-entry-note", "辞書データが見つかりませんでした。"));
+		return card;
+	}
+
+	card.append(paragraph("lookup-entry-line", `音: ${entry.on.length > 0 ? entry.on.join("、") : "なし"}`));
+	card.append(paragraph("lookup-entry-line", `訓: ${entry.kun.length > 0 ? entry.kun.join("、") : "なし"}`));
+	return card;
 }
 
 function selectBestRecognition(previewResult: OcrResult, accurateResult: OcrResult | null, kanaResult: KanaRecognitionResult | null, handwrittenResult: HandwrittenRecognitionResult | null): RecognitionSelection {
