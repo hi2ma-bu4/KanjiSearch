@@ -37,6 +37,11 @@ export interface OcrResult {
   averageConfidence: number;
   lines: OcrLineResult[];
   elapsedMs: number;
+  suggestions?: Array<{
+    text: string;
+    score: number;
+    source: string;
+  }>;
 }
 
 export interface AppModelManifest {
@@ -48,4 +53,23 @@ export interface AppModelManifest {
   preferredInputWidth: number;
   maxInputWidth: number;
   cacheVersion: string;
+}
+
+export interface AppClassifierManifest {
+  modelUrl: string;
+  labelsUrl: string;
+  wasmBinaryUrl: string;
+  wasmModuleUrl: string;
+  cacheVersion: string;
+}
+
+export interface HandwrittenRecognitionResult {
+  text: string;
+  score: number;
+  characterCount: number;
+  elapsedMs: number;
+  suggestions: Array<{
+    text: string;
+    score: number;
+  }>;
 }

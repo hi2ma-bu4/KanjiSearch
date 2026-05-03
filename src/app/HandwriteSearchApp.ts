@@ -1,19 +1,19 @@
 import '../styles/app.css';
 
 import { AppDatabase } from './AppDatabase';
+import { ClassifierAssetService } from './ClassifierAssetService';
 import { HandwritingCanvas } from './HandwritingCanvas';
+import { HandwrittenClassifierClient } from './HandwrittenClassifierClient';
 import { KanaTemplateRecognizer, type KanaRecognitionResult } from './KanaTemplateRecognizer';
 import { ModelAssetService } from './ModelAssetService';
 import { OcrWorkerClient } from './OcrWorkerClient';
-import type { AppModelManifest, DrawSessionRecord, OcrLineResult, OcrResult } from './types';
-
-declare const __BUILD_TIME__: string;
+import type { AppClassifierManifest, HandwrittenRecognitionResult, AppModelManifest, OcrLineResult, OcrResult } from './types';
 
 const WASM_BINARY_URL = new URL('./vendor/onnxruntime/ort-wasm-simd-threaded.wasm', import.meta.url).toString();
 const WASM_MODULE_URL = new URL('./vendor/onnxruntime/ort-wasm-simd-threaded.mjs', import.meta.url).toString();
 
 const LIVE_PREVIEW_MANIFEST: AppModelManifest = {
-  modelLabel: 'PP-OCRv5 Mobile',
+  modelLabel: 'preview',
   modelUrl: new URL('./assets/ocr/mobile/rec.onnx', import.meta.url).toString(),
   dictionaryUrl: new URL('./assets/ocr/mobile/dict.txt', import.meta.url).toString(),
   wasmBinaryUrl: WASM_BINARY_URL,
@@ -24,7 +24,7 @@ const LIVE_PREVIEW_MANIFEST: AppModelManifest = {
 };
 
 const ACCURATE_RECOGNITION_MANIFEST: AppModelManifest = {
-  modelLabel: 'PP-OCRv5 Server',
+  modelLabel: 'final',
   modelUrl: new URL('./assets/ocr/server/rec.onnx', import.meta.url).toString(),
   dictionaryUrl: new URL('./assets/ocr/server/dict.txt', import.meta.url).toString(),
   wasmBinaryUrl: WASM_BINARY_URL,
@@ -34,40 +34,52 @@ const ACCURATE_RECOGNITION_MANIFEST: AppModelManifest = {
   cacheVersion: 'ppocrv5-ch-ja-server-v3',
 };
 
+const HANDWRITTEN_CLASSIFIER_MANIFEST: AppClassifierManifest = {
+  modelUrl: new URL('./assets/handwritten/kanjidnn/model.onnx', import.meta.url).toString(),
+  labelsUrl: new URL('./assets/handwritten/kanjidnn/labels.txt', import.meta.url).toString(),
+  wasmBinaryUrl: WASM_BINARY_URL,
+  wasmModuleUrl: WASM_MODULE_URL,
+  cacheVersion: 'kanjidnn-ja-v1',
+};
+
 interface RecognitionSelection {
   label: string;
   result: OcrResult;
   score: number;
 }
 
+interface RecognitionSuggestion {
+  text: string;
+  score: number;
+  source: string;
+}
+
 export class HandwriteSearchApp {
   private readonly database = new AppDatabase();
   private readonly previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
   private readonly accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
+  private readonly classifierAssets = new ClassifierAssetService(this.database, HANDWRITTEN_CLASSIFIER_MANIFEST);
   private readonly kanaRecognizer = new KanaTemplateRecognizer();
   private readonly previewWorker = new OcrWorkerClient();
   private readonly accurateWorker = new OcrWorkerClient();
+  private readonly classifierWorker = new HandwrittenClassifierClient();
   private readonly root = document.createElement('main');
   private readonly canvasElement = document.createElement('canvas');
   private readonly canvasController = new HandwritingCanvas(this.canvasElement);
-  private readonly recognizeButton = createButton('認識する', 'button button-primary');
-  private readonly clearButton = createButton('消去', 'button button-secondary');
-  private readonly saveButton = createButton('いまの状態を保存', 'button button-ghost');
-  private readonly clearHistoryButton = createButton('履歴を削除', 'button button-ghost');
-  private readonly statusLabel = document.createElement('div');
-  private readonly progressLabel = document.createElement('div');
-  private readonly brushInput = document.createElement('input');
-  private readonly brushOutput = document.createElement('output');
+  private readonly recognizeButton = createButton('よみとる', 'button button-primary');
+  private readonly clearButton = createButton('けす', 'button button-secondary');
+  private readonly statusLabel = document.createElement('p');
   private readonly previewText = document.createElement('pre');
   private readonly previewMeta = document.createElement('p');
   private readonly resultText = document.createElement('pre');
   private readonly resultMeta = document.createElement('p');
-  private readonly historyList = document.createElement('div');
-  private readonly modelBadge = document.createElement('span');
+  private readonly suggestionList = document.createElement('div');
   private currentResult: OcrResult | null = null;
   private previewReady = false;
   private accurateReady = false;
+  private classifierReady = false;
   private accurateReadyPromise: Promise<void> | null = null;
+  private classifierReadyPromise: Promise<void> | null = null;
   private previewTimer: number | null = null;
   private previewGeneration = 0;
   private previewRunning = false;
@@ -82,7 +94,6 @@ export class HandwriteSearchApp {
     this.canvasController.setContentChangedListener(() => {
       this.handleCanvasChanged();
     });
-    await this.renderHistory();
     await this.initializeRecognizers();
 
     const resizeObserver = new ResizeObserver(() => this.canvasController.resize());
@@ -90,80 +101,46 @@ export class HandwriteSearchApp {
   }
 
   private buildLayout(): void {
-    const hero = section('hero');
-    const heroCopy = div('hero-copy');
-    heroCopy.append(
-      chip('IndexedDB handwriting lab'),
-      heading('hero-title', '漢字手書き検索ツール'),
-      paragraph(
-        'hero-lead',
-        '軽量モデルのリアルタイムプレビューと高精度モデルの最終認識を組み合わせて、かな・カナ・漢字を短文中心に読み取れるよう調整しています。描画履歴とOCR結果はブラウザ内に保存されます。'
-      ),
-      this.buildStatusStrip()
+    const header = section('app-header');
+    header.append(
+      heading('app-title', 'てがきで しらべる'),
+      paragraph('app-lead', 'おおきく 1〜4もじ くらい かいてください。かな も 漢字 も よめるようにしています。'),
+      this.buildSteps(),
+      this.buildStatus()
     );
-    hero.append(heroCopy);
 
-    const dashboard = div('dashboard');
-    dashboard.append(this.buildCanvasPanel(), this.buildResultPanel());
+    const layout = div('app-layout');
+    layout.append(this.buildCanvasPanel(), this.buildResultPanel());
 
-    this.root.append(hero, dashboard);
+    this.root.append(header, layout);
   }
 
-  private buildStatusStrip(): HTMLElement {
-    const strip = div('status-strip');
-    this.statusLabel.className = 'status-pill';
-    this.statusLabel.textContent = '準備中…';
+  private buildSteps(): HTMLElement {
+    const steps = div('steps');
+    steps.append(
+      stepCard('1', 'ここに かく', 'ゆっくり おおきく かいてください。'),
+      stepCard('2', 'よみとる', 'ボタンを おすと しっかり たしかめます。'),
+      stepCard('3', 'えらぶ', 'ちがうときは「もしかして」を えらべます。')
+    );
+    return steps;
+  }
 
-    this.modelBadge.className = 'status-pill';
-    this.modelBadge.textContent = 'モデル: 軽量 PP-OCRv5 Mobile / 高精度 PP-OCRv5 Server';
-
-    this.progressLabel.className = 'status-pill';
-    this.progressLabel.textContent = `Build ${new Date(__BUILD_TIME__).toLocaleString('ja-JP')}`;
-
-    strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
-    return strip;
+  private buildStatus(): HTMLElement {
+    const status = div('status-box');
+    this.statusLabel.className = 'status-text';
+    this.statusLabel.textContent = 'じゅんびしています…';
+    status.append(this.statusLabel);
+    return status;
   }
 
   private buildCanvasPanel(): HTMLElement {
-    const panel = div('panel');
-    const inner = div('panel-inner');
-    inner.append(
-      panelHeader(
-        '書いて認識する',
-        '1〜4文字中心、最大10文字程度のかな・カナ・漢字を想定しています。最終認識では軽量/高精度モデルの両方を比較します。'
-      ),
-      this.buildToolbar(),
+    const panel = div('card');
+    panel.append(
+      panelHeading('かく ところ', 'まんなかに 1〜4もじ くらい かいてください。'),
       this.buildCanvasFrame(),
-      hintRow([
-        '描画中は軽量モデルで自動プレビュー',
-        '確定時は2モデルを比較して採用',
-        '結果とサムネイルはIndexedDBに保存',
-      ]),
-      actionsRow(this.recognizeButton, this.clearButton, this.saveButton)
+      actionsRow(this.recognizeButton, this.clearButton)
     );
-    panel.append(inner);
     return panel;
-  }
-
-  private buildToolbar(): HTMLElement {
-    const toolbar = div('toolbar');
-    const brushGroup = div('toolbar-group');
-    const brushLabel = document.createElement('label');
-    brushLabel.textContent = '筆圧';
-    brushLabel.htmlFor = 'brush-size';
-
-    this.brushInput.type = 'range';
-    this.brushInput.id = 'brush-size';
-    this.brushInput.min = '8';
-    this.brushInput.max = '28';
-    this.brushInput.step = '1';
-    this.brushInput.value = '16';
-    this.brushOutput.value = this.brushInput.value;
-    this.brushOutput.textContent = this.brushInput.value;
-
-    brushGroup.append(brushLabel, this.brushInput, this.brushOutput);
-    toolbar.append(brushGroup);
-    return toolbar;
   }
 
   private buildCanvasFrame(): HTMLElement {
@@ -174,63 +151,42 @@ export class HandwriteSearchApp {
   }
 
   private buildResultPanel(): HTMLElement {
-    const panel = div('panel');
-    const inner = div('panel-inner');
-    const footer = paragraph(
-      'footer-note',
-      'PP-OCR 系モデルは1行認識ベースです。ページ側で行分割してから推論し、短い日本語文字列向けにスコアリングして最終候補を選びます。'
-    );
+    const panel = div('card result-card');
 
-    const previewCard = div('result-card result-card-preview');
-    const previewLabel = document.createElement('p');
-    previewLabel.className = 'result-label';
-    previewLabel.textContent = 'Live Preview';
+    const previewCard = div('result-box result-box-preview');
+    previewCard.append(
+      label('box-label', 'いまの よそう'),
+      this.previewText,
+      this.previewMeta
+    );
     this.previewText.className = 'result-text result-text-preview';
-    this.previewText.textContent = 'まだプレビューしていません。';
-    this.previewMeta.className = 'result-meta';
-    this.previewMeta.textContent = '軽量モデルの準備後、描画に合わせて候補を自動更新します。';
-    previewCard.append(previewLabel, this.previewText, this.previewMeta);
+    this.previewText.textContent = 'まだ みていません。';
+    this.previewMeta.className = 'result-note';
+    this.previewMeta.textContent = 'かきはじめると ここに でます。';
 
-    const resultCard = div('result-card');
-    const resultLabel = document.createElement('p');
-    resultLabel.className = 'result-label';
-    resultLabel.textContent = 'Final Recognition';
+    const finalCard = div('result-box');
+    finalCard.append(
+      label('box-label', 'けっか'),
+      this.resultText,
+      this.resultMeta,
+      this.suggestionList
+    );
     this.resultText.className = 'result-text';
-    this.resultText.textContent = 'まだ認識していません。';
-    this.resultMeta.className = 'result-meta';
-    this.resultMeta.textContent = '高精度認識はモデル準備後に「認識する」で実行されます。';
-    resultCard.append(resultLabel, this.resultText, this.resultMeta);
+    this.resultText.textContent = 'まだ よんでいません。';
+    this.resultMeta.className = 'result-note';
+    this.resultMeta.textContent = '「よみとる」を おすと ここに でます。';
+    this.suggestionList.className = 'suggestion-list';
 
-    const historyHeader = panelHeader(
-      '履歴',
-      'サムネイルと認識結果をブラウザ内に保存します。クリックでキャンバスへ戻せます。'
+    panel.append(
+      panelHeading('よみとり', 'まちがっていたら、下の候補を えらべます。'),
+      previewCard,
+      finalCard
     );
-    const historyActions = actionsRow(this.clearHistoryButton);
-    this.historyList.className = 'history-list';
 
-    inner.append(
-      panelHeader(
-        '認識結果',
-        '軽量モデルは追従性を優先、高精度モデルは確定精度を優先します。最終表示には両方の候補を比較した採用結果を出します。'
-      ),
-      div('result-stack', previewCard, resultCard),
-      historyHeader,
-      historyActions,
-      this.historyList,
-      footer
-    );
-    panel.append(inner);
     return panel;
   }
 
   private bindEvents(): void {
-    this.brushInput.addEventListener('input', () => {
-      const nextBrush = Number(this.brushInput.value);
-      this.brushOutput.value = String(nextBrush);
-      this.brushOutput.textContent = String(nextBrush);
-      this.canvasController.setBrushSize(nextBrush);
-    });
-
     this.recognizeButton.addEventListener('click', async () => {
       await this.runRecognition();
     });
@@ -240,41 +196,33 @@ export class HandwriteSearchApp {
       this.cancelPendingPreview();
       this.currentResult = null;
       this.previewGeneration += 1;
-      this.previewText.textContent = 'まだプレビューしていません。';
-      this.previewMeta.textContent = '軽量モデルは新しい入力を待機しています。';
-      this.resultText.textContent = 'まだ認識していません。';
-      this.resultMeta.textContent = 'キャンバスを消去しました。';
-      this.setStatus('キャンバスを消去しました。');
-    });
-
-    this.saveButton.addEventListener('click', async () => {
-      await this.saveCurrentSnapshot();
-    });
-
-    this.clearHistoryButton.addEventListener('click', async () => {
-      await this.database.clearSessions();
-      await this.renderHistory();
-      this.setStatus('履歴を削除しました。');
+      this.previewText.textContent = 'まだ みていません。';
+      this.previewMeta.textContent = 'かきはじめると ここに でます。';
+      this.resultText.textContent = 'まだ よんでいません。';
+      this.resultMeta.textContent = 'もう一度 かいてください。';
+      this.renderSuggestions([]);
+      this.setStatus('けしました。もう一度 かいてください。');
     });
   }
 
   private async initializeRecognizers(): Promise<void> {
-    this.setStatus('軽量プレビュー用モデルを準備しています…');
+    this.setStatus('はじめる じゅんびを しています…');
     this.setBusy(true);
     try {
       const [modelBuffer, dictionary] = await Promise.all([
-        this.previewAssets.getModelBuffer(message => this.setStatus(`軽量モデル: ${message}`)),
-        this.previewAssets.getDictionary(message => this.setStatus(`軽量モデル: ${message}`)),
+        this.previewAssets.getModelBuffer(() => this.setStatus('よみとりの じゅんびを しています…')),
+        this.previewAssets.getDictionary(() => this.setStatus('ことばの じゅんびを しています…')),
       ]);
       await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
       this.previewReady = true;
-      this.previewMeta.textContent = '描画に応じて軽量モデルの候補を自動更新します。';
       this.kanaRecognizer.initialize();
-      this.setStatus('軽量プレビュー準備完了。高精度モデルをバックグラウンドで読み込んでいます…');
+      this.previewMeta.textContent = 'かくたびに ここを みます。';
+      this.setStatus('かけます。「よみとる」を おすと しっかり たしかめます。');
       void this.prepareAccurateRecognizer().catch(() => undefined);
+      void this.prepareHandwrittenClassifier().catch(() => undefined);
     } catch (error) {
       console.error(error);
-      this.setStatus(`軽量モデルの初期化に失敗しました: ${(error as Error).message}`);
+      this.setStatus(`じゅんびに しっぱいしました: ${(error as Error).message}`);
     } finally {
       this.setBusy(false);
     }
@@ -287,38 +235,65 @@ export class HandwriteSearchApp {
 
     this.accurateReadyPromise = (async () => {
       const [modelBuffer, dictionary] = await Promise.all([
-        this.accurateAssets.getModelBuffer(message => this.setStatus(`高精度モデル: ${message}`)),
-        this.accurateAssets.getDictionary(message => this.setStatus(`高精度モデル: ${message}`)),
+        this.accurateAssets.getModelBuffer(),
+        this.accurateAssets.getDictionary(),
       ]);
       await this.accurateWorker.initialize(ACCURATE_RECOGNITION_MANIFEST, modelBuffer, dictionary);
       this.accurateReady = true;
-      this.setStatus('軽量プレビューと高精度認識の両方が準備できました。');
     })().catch(error => {
       this.accurateReady = false;
       this.accurateReadyPromise = null;
       console.error(error);
-      this.setStatus(`高精度モデルの初期化に失敗しました: ${(error as Error).message}`);
+      this.setStatus(`くわしい よみとりの じゅんびに しっぱいしました: ${(error as Error).message}`);
       throw error;
     });
 
     return this.accurateReadyPromise;
   }
 
+  private prepareHandwrittenClassifier(): Promise<void> {
+    if (this.classifierReadyPromise) {
+      return this.classifierReadyPromise;
+    }
+
+    this.classifierReadyPromise = (async () => {
+      const [modelBuffer, labels] = await Promise.all([
+        this.classifierAssets.getModelBuffer(),
+        this.classifierAssets.getLabels(),
+      ]);
+      await this.classifierWorker.initialize(HANDWRITTEN_CLASSIFIER_MANIFEST, modelBuffer, labels);
+      this.classifierReady = true;
+    })().catch(error => {
+      this.classifierReady = false;
+      this.classifierReadyPromise = null;
+      console.error(error);
+      this.setStatus(`手書きよみとりの じゅんびに しっぱいしました: ${(error as Error).message}`);
+      throw error;
+    });
+
+    return this.classifierReadyPromise;
+  }
+
   private handleCanvasChanged(): void {
     this.currentResult = null;
-    this.resultText.textContent = '手書きが更新されました。';
-    this.resultMeta.textContent = this.accurateReady
-      ? '軽量プレビューを更新しています。確定するには「認識する」を押してください。'
-      : '軽量プレビューを更新しています。高精度モデルも準備中です。';
+    this.resultText.textContent = 'まだ よんでいません。';
+    this.resultMeta.textContent = '「よみとる」を おすと しっかり たしかめます。';
+    this.renderSuggestions([]);
 
-    if (!this.previewReady) {
-      this.previewText.textContent = '軽量モデルを準備中です…';
-      this.previewMeta.textContent = '準備でき次第、描画に追従して候補を出します。';
+    if (this.canvasController.strokeCount === 0) {
+      this.previewText.textContent = 'まだ みていません。';
+      this.previewMeta.textContent = 'かきはじめると ここに でます。';
       return;
     }
 
-    this.previewText.textContent = 'プレビューを更新しています…';
-    this.previewMeta.textContent = '軽量モデルで最新ストロークを確認中です。';
+    if (!this.previewReady) {
+      this.previewText.textContent = 'じゅんびしています…';
+      this.previewMeta.textContent = 'もう少し おまちください。';
+      return;
+    }
+
+    this.previewText.textContent = 'みています…';
+    this.previewMeta.textContent = 'いまの かたちを かくにんしています。';
     this.schedulePreviewRecognition();
   }
 
@@ -351,23 +326,25 @@ export class HandwriteSearchApp {
 
     this.previewRunning = true;
     try {
-      const result = await this.previewWorker.recognize(this.canvasController.exportImageData());
-      const kanaResult = this.kanaRecognizer.recognize(this.canvasController.exportImageData());
+      const imageData = this.canvasController.exportImageData();
+      const result = await this.previewWorker.recognize(imageData);
+      const kanaResult = this.kanaRecognizer.recognize(imageData);
       if (generation !== this.previewGeneration) {
         return;
       }
-      if (kanaResult) {
-        this.previewText.textContent = kanaResult.text;
-        this.previewMeta.textContent = `かなテンプレート / ${kanaResult.characterCount}文字 / スコア ${(kanaResult.score * 100).toFixed(1)}%`;
-      } else {
-        this.previewText.textContent = result.text || 'まだ候補が見つかりません。';
-        this.previewMeta.textContent = `軽量モデル / 行数 ${result.lines.length} / 平均信頼度 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
-      }
+
+      const previewText = kanaResult?.text || result.text || 'まだ わかりません。';
+      this.previewText.textContent = previewText;
+      this.previewMeta.textContent = kanaResult
+        ? 'かなとしては このように 見えます。'
+        : previewText === 'まだ わかりません。'
+          ? 'もう少し おおきく かいてみてください。'
+          : 'いまは このように 見えます。';
     } catch (error) {
       console.error(error);
       if (generation === this.previewGeneration) {
-        this.previewText.textContent = 'プレビューに失敗しました。';
-        this.previewMeta.textContent = (error as Error).message;
+        this.previewText.textContent = 'みられませんでした。';
+        this.previewMeta.textContent = 'もう一度 ためしてください。';
       }
     } finally {
       this.previewRunning = false;
@@ -380,13 +357,19 @@ export class HandwriteSearchApp {
 
   private async runRecognition(): Promise<void> {
     if (!this.previewReady) {
-      this.setStatus('軽量モデルがまだ準備できていません。');
+      this.setStatus('まだ じゅんび中です。少し おまちください。');
+      return;
+    }
+
+    if (this.canvasController.strokeCount === 0) {
+      this.setStatus('まず もじを かいてください。');
       return;
     }
 
     this.cancelPendingPreview();
     this.setBusy(true);
-    this.setStatus(this.accurateReady ? '軽量 + 高精度OCRを実行しています…' : '高精度モデルを準備しつつOCRを実行しています…');
+    this.setStatus('よみとっています…');
+
     try {
       const imageData = this.canvasController.exportImageData();
       const previewPromise = this.previewWorker.recognize(imageData);
@@ -397,136 +380,84 @@ export class HandwriteSearchApp {
           console.error(error);
           return null;
         });
+      const handwrittenPromise = this.prepareHandwrittenClassifier()
+        .then(() => this.classifierWorker.recognize(imageData))
+        .catch(error => {
+          console.error(error);
+          return null;
+        });
 
-      const [previewResult, accurateResult] = await Promise.all([previewPromise, accuratePromise]);
-      const selection = selectBestRecognition(previewResult, accurateResult, kanaResult);
+      const [previewResult, accurateResult, handwrittenResult] = await Promise.all([
+        previewPromise,
+        accuratePromise,
+        handwrittenPromise,
+      ]);
+      const selection = selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult);
+      const suggestions = buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection);
 
       this.currentResult = selection.result;
-      if (kanaResult) {
-        this.previewText.textContent = kanaResult.text;
-        this.previewMeta.textContent = `かなテンプレート / ${kanaResult.characterCount}文字 / スコア ${(kanaResult.score * 100).toFixed(1)}%`;
-      } else {
-        this.previewText.textContent = previewResult.text || 'まだ候補が見つかりません。';
-        this.previewMeta.textContent = `軽量モデル / 行数 ${previewResult.lines.length} / 平均信頼度 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
-      }
-      this.resultText.textContent = selection.result.text || '文字が見つかりませんでした。';
-      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult, kanaResult);
-      const statusMessage =
-        accurateResult
-          ? `認識が完了しました。採用: ${selection.label}`
-          : '高精度モデルなしで認識が完了しました。';
-      this.setStatus(statusMessage);
-      await this.saveCurrentSnapshot();
-      this.setStatus(statusMessage);
+      this.currentResult.suggestions = suggestions;
+      this.previewText.textContent = kanaResult?.text || previewResult.text || 'まだ わかりません。';
+      this.previewMeta.textContent = kanaResult
+        ? 'かなとしては このように 見えます。'
+        : 'いまの よそうです。';
+
+      const finalText = selection.result.text || 'よく わかりませんでした。';
+      this.resultText.textContent = finalText;
+      this.resultMeta.textContent = buildFinalMessage(finalText, suggestions.length);
+      this.renderSuggestions(suggestions);
+      this.setStatus(finalText === 'よく わかりませんでした。' ? 'もう一度 おおきく かいてみてください。' : 'けっかを 出しました。');
     } catch (error) {
       console.error(error);
-      this.setStatus(`認識に失敗しました: ${(error as Error).message}`);
+      this.setStatus(`よみとりに しっぱいしました: ${(error as Error).message}`);
     } finally {
       this.setBusy(false);
     }
   }
 
-  private async saveCurrentSnapshot(): Promise<void> {
-    const record = this.createSessionRecord();
-    await this.database.saveSession(record);
-    await this.renderHistory();
-    this.setStatus('描画状態を保存しました。');
-  }
-
-  private createSessionRecord(): DrawSessionRecord {
-    const now = Date.now();
-    return {
-      id: crypto.randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-      previewDataUrl: this.canvasController.toImageDataUrl(),
-      recognizedText: this.currentResult?.text ?? '',
-      averageConfidence: this.currentResult?.averageConfidence ?? 0,
-      lineCount: this.currentResult?.lines.length ?? 0,
-      strokeCount: this.canvasController.strokeCount,
-      brushSize: Number(this.brushInput.value),
-      canvasWidth: this.canvasController.width,
-      canvasHeight: this.canvasController.height,
-    };
-  }
-
-  private async renderHistory(): Promise<void> {
-    const sessions = await this.database.listSessions();
-    this.historyList.replaceChildren();
-
-    if (sessions.length === 0) {
-      this.historyList.append(
-        paragraph('empty-state', 'まだ保存された履歴はありません。認識または保存を行うとここに並びます。')
-      );
-      return;
-    }
-
-    for (const session of sessions) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'history-item';
-
-      const img = document.createElement('img');
-      img.className = 'history-preview';
-      img.alt = '保存された手書きプレビュー';
-      img.src = session.previewDataUrl;
-
-      const body = div('history-body');
-      const time = document.createElement('time');
-      time.dateTime = new Date(session.updatedAt).toISOString();
-      time.textContent = new Date(session.updatedAt).toLocaleString('ja-JP');
-
-      const text = div('history-text');
-      text.textContent = session.recognizedText || '未認識の下書き';
-
-      const meta = div('history-meta');
-      meta.textContent = `線 ${session.strokeCount} / 行 ${session.lineCount} / 信頼度 ${(session.averageConfidence * 100).toFixed(0)}%`;
-      body.append(time, text, meta);
-      button.append(img, body);
-
-      button.addEventListener('click', async () => {
-        await this.canvasController.restoreFromDataUrl(session.previewDataUrl);
-        this.brushInput.value = String(session.brushSize);
-        this.brushOutput.value = String(session.brushSize);
-        this.brushOutput.textContent = String(session.brushSize);
-        this.canvasController.setBrushSize(session.brushSize);
-        this.currentResult = {
-          text: session.recognizedText,
-          averageConfidence: session.averageConfidence,
-          elapsedMs: 0,
-          lines: [],
-        };
-        this.previewGeneration += 1;
-        this.previewText.textContent = session.recognizedText || '保存時点では未認識でした。';
-        this.previewMeta.textContent = `${new Date(session.updatedAt).toLocaleString('ja-JP')} の保存内容です。`;
-        this.resultText.textContent = session.recognizedText || '保存時点では未認識でした。';
-        this.resultMeta.textContent = `${new Date(session.updatedAt).toLocaleString('ja-JP')} の保存内容を復元しました。`;
-        this.setStatus('履歴からキャンバスを復元しました。');
-      });
-
-      this.historyList.append(button);
-    }
-  }
-
   private setBusy(isBusy: boolean): void {
     this.recognizeButton.disabled = isBusy;
-    this.saveButton.disabled = isBusy;
-    this.clearHistoryButton.disabled = isBusy;
+    this.clearButton.disabled = isBusy;
   }
 
   private setStatus(message: string): void {
     this.statusLabel.textContent = message;
+  }
+
+  private renderSuggestions(suggestions: RecognitionSuggestion[]): void {
+    this.suggestionList.replaceChildren();
+    if (suggestions.length === 0) {
+      return;
+    }
+
+    const labelElement = label('suggestion-label', 'もしかして');
+    this.suggestionList.append(labelElement);
+
+    for (const suggestion of suggestions.slice(0, 5)) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'suggestion-chip';
+      chip.textContent = suggestion.text;
+      chip.title = suggestion.source;
+      chip.addEventListener('click', () => {
+        this.resultText.textContent = suggestion.text;
+        this.resultMeta.textContent = 'えらんだ候補を 表示しています。';
+        this.setStatus(`「${suggestion.text}」を えらびました。`);
+      });
+      this.suggestionList.append(chip);
+    }
   }
 }
 
 function selectBestRecognition(
   previewResult: OcrResult,
   accurateResult: OcrResult | null,
-  kanaResult: KanaRecognitionResult | null
+  kanaResult: KanaRecognitionResult | null,
+  handwrittenResult: HandwrittenRecognitionResult | null
 ): RecognitionSelection {
   const candidates: RecognitionSelection[] = [
     {
-      label: LIVE_PREVIEW_MANIFEST.modelLabel,
+      label: 'preview',
       result: previewResult,
       score: scoreRecognition(previewResult, 0.01),
     },
@@ -534,7 +465,7 @@ function selectBestRecognition(
 
   if (accurateResult) {
     candidates.push({
-      label: ACCURATE_RECOGNITION_MANIFEST.modelLabel,
+      label: 'final',
       result: accurateResult,
       score: scoreRecognition(accurateResult, 0.05),
     });
@@ -542,7 +473,7 @@ function selectBestRecognition(
     const hybridResult = buildHybridResult(previewResult, accurateResult);
     if (hybridResult) {
       candidates.push({
-        label: '複合結果',
+        label: 'hybrid',
         result: hybridResult,
         score: scoreRecognition(hybridResult, 0.035),
       });
@@ -551,9 +482,17 @@ function selectBestRecognition(
 
   if (kanaResult) {
     candidates.push({
-      label: 'Kana Template',
+      label: 'kana',
       result: kanaResultToOcrResult(kanaResult),
       score: scoreKanaRecognition(kanaResult),
+    });
+  }
+
+  if (handwrittenResult) {
+    candidates.push({
+      label: 'handwritten',
+      result: handwrittenResultToOcrResult(handwrittenResult),
+      score: scoreHandwrittenRecognition(handwrittenResult),
     });
   }
 
@@ -579,34 +518,48 @@ function buildHybridResult(previewResult: OcrResult, accurateResult: OcrResult):
   };
 }
 
-function buildFinalMeta(
-  selection: RecognitionSelection,
+function buildRecognitionSuggestions(
   previewResult: OcrResult,
   accurateResult: OcrResult | null,
-  kanaResult: KanaRecognitionResult | null
-): string {
-  const parts = [
-    `採用 ${selection.label}`,
-    `行数 ${selection.result.lines.length}`,
-    `平均信頼度 ${(selection.result.averageConfidence * 100).toFixed(1)}%`,
-    `軽量 ${(previewResult.averageConfidence * 100).toFixed(1)}%`,
-  ];
+  kanaResult: KanaRecognitionResult | null,
+  handwrittenResult: HandwrittenRecognitionResult | null,
+  selection: RecognitionSelection
+): RecognitionSuggestion[] {
+  const suggestions = new Map<string, RecognitionSuggestion>();
 
+  const push = (text: string, score: number, source: string) => {
+    const normalized = normalizeForScoring(text);
+    if (!normalized || normalized === normalizeForScoring(selection.result.text)) {
+      return;
+    }
+    const existing = suggestions.get(normalized);
+    if (!existing || score > existing.score) {
+      suggestions.set(normalized, { text: normalized, score, source });
+    }
+  };
+
+  push(previewResult.text, scoreRecognition(previewResult, 0), 'preview');
   if (accurateResult) {
-    parts.push(`高精度 ${(accurateResult.averageConfidence * 100).toFixed(1)}%`);
+    push(accurateResult.text, scoreRecognition(accurateResult, 0), 'final');
+    const hybridResult = buildHybridResult(previewResult, accurateResult);
+    if (hybridResult) {
+      push(hybridResult.text, scoreRecognition(hybridResult, 0), 'hybrid');
+    }
   }
 
   if (kanaResult) {
-    parts.push(`かな ${(kanaResult.score * 100).toFixed(1)}%`);
+    for (const suggestion of kanaResult.suggestions) {
+      push(suggestion.text, scoreKanaRecognition({ ...kanaResult, text: suggestion.text, score: suggestion.score }), 'kana');
+    }
   }
 
-  if (accurateResult) {
-    parts.push(`${Math.max(previewResult.elapsedMs, accurateResult.elapsedMs).toFixed(0)}ms`);
-  } else {
-    parts.push(`${previewResult.elapsedMs.toFixed(0)}ms`);
+  if (handwrittenResult) {
+    for (const suggestion of handwrittenResult.suggestions) {
+      push(suggestion.text, scoreHandwrittenSuggestion(suggestion.text, suggestion.score), 'handwritten');
+    }
   }
 
-  return parts.join(' / ');
+  return [...suggestions.values()].sort((left, right) => right.score - left.score);
 }
 
 function kanaResultToOcrResult(result: KanaRecognitionResult): OcrResult {
@@ -614,6 +567,31 @@ function kanaResultToOcrResult(result: KanaRecognitionResult): OcrResult {
     text: result.text,
     averageConfidence: result.score,
     elapsedMs: 0,
+    lines: [
+      {
+        text: result.text,
+        confidence: result.score,
+        boundingBox: { x: 0, y: 0, width: 0, height: 0 },
+      },
+    ],
+  };
+}
+
+function buildFinalMessage(text: string, suggestionCount: number): string {
+  if (!text || text === 'よく わかりませんでした。') {
+    return 'よく わからなかったため、もう一度 おためしください。';
+  }
+
+  return suggestionCount > 0
+    ? 'いちばん近い候補です。下の「もしかして」も えらべます。'
+    : 'いちばん近い候補です。';
+}
+
+function handwrittenResultToOcrResult(result: HandwrittenRecognitionResult): OcrResult {
+  return {
+    text: result.text,
+    averageConfidence: result.score,
+    elapsedMs: result.elapsedMs,
     lines: [
       {
         text: result.text,
@@ -652,6 +630,23 @@ function scoreKanaRecognition(result: KanaRecognitionResult): number {
   return result.score * 0.82 + lengthScore * 0.18 + 0.08;
 }
 
+function scoreHandwrittenRecognition(result: HandwrittenRecognitionResult): number {
+  return scoreHandwrittenSuggestion(result.text, result.score) + (result.characterCount <= 4 ? 0.1 : 0.04);
+}
+
+function scoreHandwrittenSuggestion(text: string, score: number): number {
+  const normalized = normalizeForScoring(text);
+  if (!normalized) {
+    return -1;
+  }
+
+  const characters = [...normalized];
+  const allowedRatio =
+    characters.filter(character => isAllowedJapaneseCharacter(character)).length / characters.length;
+  const lengthScore = characters.length <= 4 ? 1 : characters.length <= 10 ? 0.88 : 0.4;
+  return clamp(score, 0, 1) * 0.72 + allowedRatio * 0.18 + lengthScore * 0.1;
+}
+
 function scoreLine(line: OcrLineResult): number {
   const text = normalizeForScoring(line.text);
   if (!text) {
@@ -685,16 +680,16 @@ function heading(className: string, text: string): HTMLHeadingElement {
   return element;
 }
 
-function paragraph(className: string, text: string): HTMLParagraphElement {
+function label(className: string, text: string): HTMLParagraphElement {
   const element = document.createElement('p');
   element.className = className;
   element.textContent = text;
   return element;
 }
 
-function chip(text: string): HTMLSpanElement {
-  const element = document.createElement('span');
-  element.className = 'eyebrow';
+function paragraph(className: string, text: string): HTMLParagraphElement {
+  const element = document.createElement('p');
+  element.className = className;
   element.textContent = text;
   return element;
 }
@@ -714,26 +709,27 @@ function div(className: string, ...children: HTMLElement[]): HTMLDivElement {
   return element;
 }
 
-function panelHeader(title: string, subtitle: string): HTMLElement {
-  const header = div('panel-header');
-  const copy = document.createElement('div');
+function stepCard(number: string, title: string, text: string): HTMLElement {
+  const card = div('step-card');
+  const badge = document.createElement('span');
+  badge.className = 'step-number';
+  badge.textContent = number;
+  const titleElement = document.createElement('h2');
+  titleElement.className = 'step-title';
+  titleElement.textContent = title;
+  const textElement = paragraph('step-text', text);
+  card.append(badge, titleElement, textElement);
+  return card;
+}
+
+function panelHeading(title: string, subtitle: string): HTMLElement {
+  const header = div('panel-heading');
   const titleElement = document.createElement('h2');
   titleElement.className = 'panel-title';
   titleElement.textContent = title;
   const subtitleElement = paragraph('panel-subtitle', subtitle);
-  copy.append(titleElement, subtitleElement);
-  header.append(copy);
+  header.append(titleElement, subtitleElement);
   return header;
-}
-
-function hintRow(items: string[]): HTMLElement {
-  const row = div('hint-row');
-  for (const item of items) {
-    const span = document.createElement('span');
-    span.textContent = item;
-    row.append(span);
-  }
-  return row;
 }
 
 function actionsRow(...buttons: HTMLButtonElement[]): HTMLElement {
@@ -742,10 +738,10 @@ function actionsRow(...buttons: HTMLButtonElement[]): HTMLElement {
   return actions;
 }
 
-function createButton(label: string, className: string): HTMLButtonElement {
+function createButton(labelText: string, className: string): HTMLButtonElement {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = className;
-  button.textContent = label;
+  button.textContent = labelText;
   return button;
 }

@@ -20,10 +20,16 @@ interface GlyphTemplate {
   colProfile: Float32Array;
 }
 
+export interface KanaSuggestion {
+  text: string;
+  score: number;
+}
+
 export interface KanaRecognitionResult {
   text: string;
   score: number;
   characterCount: number;
+  suggestions: KanaSuggestion[];
 }
 
 export class KanaTemplateRecognizer {
@@ -64,24 +70,30 @@ export class KanaTemplateRecognizer {
       return null;
     }
 
-    const characters: string[] = [];
-    const scores: number[] = [];
+    const topCandidatesByGroup: Array<Array<{ char: string; score: number }>> = [];
     for (const group of groups) {
       const bitmap = normalizeMaskToTemplate(mask, imageData.width, imageData.height, group);
       const rowProfile = buildRowProfile(bitmap);
       const colProfile = buildColProfile(bitmap);
-      const best = findBestTemplateMatch(bitmap, rowProfile, colProfile, this.templates);
+      const candidates = findTopTemplateMatches(bitmap, rowProfile, colProfile, this.templates, 4);
+      const best = candidates[0];
       if (!best || best.score < 0.42) {
         return null;
       }
-      characters.push(best.char);
-      scores.push(best.score);
+      topCandidatesByGroup.push(candidates);
+    }
+
+    const suggestions = combineSuggestions(topCandidatesByGroup).slice(0, 5);
+    const bestSuggestion = suggestions[0];
+    if (!bestSuggestion) {
+      return null;
     }
 
     return {
-      text: characters.join(''),
-      score: scores.reduce((sum, value) => sum + value, 0) / scores.length,
-      characterCount: characters.length,
+      text: bestSuggestion.text,
+      score: bestSuggestion.score,
+      characterCount: groups.length,
+      suggestions,
     };
   }
 }
@@ -111,28 +123,62 @@ function renderCharacterTemplate(char: string, fontStack: string): Uint8Array {
     : new Uint8Array(TEMPLATE_SIZE * TEMPLATE_SIZE);
 }
 
-function findBestTemplateMatch(
+function findTopTemplateMatches(
   bitmap: Uint8Array,
   rowProfile: Float32Array,
   colProfile: Float32Array,
-  templates: GlyphTemplate[]
-): { char: string; score: number } | null {
-  let bestChar = '';
-  let bestScore = -1;
+  templates: GlyphTemplate[],
+  limit: number
+): Array<{ char: string; score: number }> {
+  const scores = new Map<string, number>();
 
   for (const template of templates) {
     const iou = bitmapIoU(bitmap, template.bitmap);
     const rowDistance = profileDistance(rowProfile, template.rowProfile);
     const colDistance = profileDistance(colProfile, template.colProfile);
     const score = iou * 0.72 + (1 - rowDistance) * 0.14 + (1 - colDistance) * 0.14;
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestChar = template.char;
+    const previous = scores.get(template.char) ?? Number.NEGATIVE_INFINITY;
+    if (score > previous) {
+      scores.set(template.char, score);
     }
   }
 
-  return bestChar ? { char: bestChar, score: bestScore } : null;
+  return [...scores.entries()]
+    .map(([char, score]) => ({ char, score }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit);
+}
+
+function combineSuggestions(
+  groups: Array<Array<{ char: string; score: number }>>,
+  limit = 8
+): KanaSuggestion[] {
+  let suggestions: KanaSuggestion[] = [{ text: '', score: 1 }];
+
+  for (const group of groups) {
+    const next: KanaSuggestion[] = [];
+    for (const prefix of suggestions) {
+      for (const candidate of group) {
+        const prefixLength = [...prefix.text].length;
+        const nextLength = prefixLength + 1;
+        next.push({
+          text: prefix.text + candidate.char,
+          score: (prefix.score * prefixLength + candidate.score) / nextLength,
+        });
+      }
+    }
+    suggestions = next.sort((left, right) => right.score - left.score).slice(0, limit);
+  }
+
+  const unique = new Map<string, KanaSuggestion>();
+  for (const suggestion of suggestions) {
+    const existing = unique.get(suggestion.text);
+    if (!existing || suggestion.score > existing.score) {
+      unique.set(suggestion.text, suggestion);
+    }
+  }
+
+  return [...unique.values()].sort((left, right) => right.score - left.score);
 }
 
 function groupComponentsIntoCharacters(

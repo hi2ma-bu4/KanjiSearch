@@ -1,0 +1,16 @@
+{
+  "source_model": "C:\\Users\\snows\\Documents\\Program\\js\\KanjiSearch\\.cache\\KanjiDNN_v2.keras",
+  "source_labels": "C:\\Users\\snows\\Documents\\Program\\js\\KanjiSearch\\.cache\\kanjidnn-config.json",
+  "source_repository": "https://huggingface.co/gaiseras/kanjiDNN",
+  "license": "Apache-2.0",
+  "input_name": "input_layer",
+  "input_shape": [
+    1,
+    64,
+    64,
+    1
+  ],
+  "class_count": 6695,
+  "opset": 17,
+  "intended_use": "Short handwritten Japanese character recognition for browser inference."
+}

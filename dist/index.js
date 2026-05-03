@@ -101,11 +101,72 @@ var AppDatabase = class {
   }
 };
 
+// src/app/ClassifierAssetService.ts
+var ClassifierAssetService = class {
+  constructor(database, manifest) {
+    this.database = database;
+    this.manifest = manifest;
+  }
+  database;
+  manifest;
+  async getModelBuffer(onProgress) {
+    const cacheKey = `${this.manifest.cacheVersion}:model`;
+    const cached = await this.database.getCachedAsset(cacheKey, this.manifest.cacheVersion);
+    if (cached?.kind === "arrayBuffer" && cached.value instanceof ArrayBuffer) {
+      onProgress?.("\u624B\u66F8\u304D\u30E2\u30C7\u30EB\u3092\u8AAD\u307F\u8FBC\u307F\u307E\u3057\u305F\u3002");
+      return cached.value;
+    }
+    onProgress?.("\u624B\u66F8\u304D\u30E2\u30C7\u30EB\u3092\u30C0\u30A6\u30F3\u30ED\u30FC\u30C9\u3057\u3066\u3044\u307E\u3059\u3002");
+    const response = await fetch(this.manifest.modelUrl);
+    if (!response.ok) {
+      throw new Error(`\u624B\u66F8\u304D\u30E2\u30C7\u30EB\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${response.status}`);
+    }
+    const buffer = await response.arrayBuffer();
+    const record = {
+      key: cacheKey,
+      kind: "arrayBuffer",
+      version: this.manifest.cacheVersion,
+      value: buffer,
+      contentType: "application/octet-stream",
+      cachedAt: Date.now()
+    };
+    await this.database.cacheAsset(record);
+    return buffer;
+  }
+  async getLabels(onProgress) {
+    const cacheKey = `${this.manifest.cacheVersion}:labels`;
+    const cached = await this.database.getCachedAsset(cacheKey, this.manifest.cacheVersion);
+    if (cached?.kind === "text" && typeof cached.value === "string") {
+      onProgress?.("\u624B\u66F8\u304D\u6587\u5B57\u306E\u4E00\u89A7\u3092\u8AAD\u307F\u8FBC\u307F\u307E\u3057\u305F\u3002");
+      return normalizeLabels(cached.value);
+    }
+    onProgress?.("\u624B\u66F8\u304D\u6587\u5B57\u306E\u4E00\u89A7\u3092\u30C0\u30A6\u30F3\u30ED\u30FC\u30C9\u3057\u3066\u3044\u307E\u3059\u3002");
+    const response = await fetch(this.manifest.labelsUrl);
+    if (!response.ok) {
+      throw new Error(`\u624B\u66F8\u304D\u6587\u5B57\u4E00\u89A7\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${response.status}`);
+    }
+    const text = await response.text();
+    const record = {
+      key: cacheKey,
+      kind: "text",
+      version: this.manifest.cacheVersion,
+      value: text,
+      contentType: "text/plain; charset=utf-8",
+      cachedAt: Date.now()
+    };
+    await this.database.cacheAsset(record);
+    return normalizeLabels(text);
+  }
+};
+function normalizeLabels(rawText) {
+  return rawText.replace(/^\uFEFF/, "").split(/\r?\n/).map((entry) => entry.trimEnd());
+}
+
 // src/app/HandwritingCanvas.ts
 var HandwritingCanvas = class {
   constructor(canvas) {
     this.canvas = canvas;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) {
       throw new Error("2D canvas context is not available.");
     }
@@ -125,12 +186,11 @@ var HandwritingCanvas = class {
   activePointerId = null;
   dpr = Math.max(1, window.devicePixelRatio || 1);
   strokeCountValue = 0;
-  brushSize = 16;
   onContentChanged = null;
   lastContentNotifyAt = 0;
-  setBrushSize(nextSize) {
-    this.brushSize = nextSize;
-  }
+  lastPoint = null;
+  minStrokeWidth = 8;
+  maxStrokeWidth = 24;
   setContentChangedListener(listener) {
     this.onContentChanged = listener;
   }
@@ -151,6 +211,7 @@ var HandwritingCanvas = class {
   clear() {
     this.strokeCountValue = 0;
     this.lastContentNotifyAt = 0;
+    this.lastPoint = null;
     this.paintBackground();
     this.onContentChanged?.();
   }
@@ -174,6 +235,7 @@ var HandwritingCanvas = class {
   }
   async restoreFromDataUrl(dataUrl) {
     this.paintBackground();
+    this.lastPoint = null;
     if (!dataUrl) {
       return;
     }
@@ -191,20 +253,18 @@ var HandwritingCanvas = class {
     this.lastContentNotifyAt = performance.now();
     this.onContentChanged?.();
     const { x, y } = this.getPoint(event);
-    this.ctx.beginPath();
-    this.ctx.moveTo(x, y);
+    const initialWidth = this.maxStrokeWidth * 0.82;
+    this.lastPoint = { x, y, time: performance.now(), width: initialWidth };
+    this.drawDot(x, y, initialWidth);
   };
   onPointerMove = (event) => {
-    if (!this.isDrawing || this.activePointerId !== event.pointerId) {
+    if (!this.isDrawing || this.activePointerId !== event.pointerId || !this.lastPoint) {
       return;
     }
-    const { x, y } = this.getPoint(event);
-    this.ctx.lineCap = "round";
-    this.ctx.lineJoin = "round";
-    this.ctx.strokeStyle = "#18110b";
-    this.ctx.lineWidth = this.scaleBrush(event.pressure);
-    this.ctx.lineTo(x, y);
-    this.ctx.stroke();
+    const point = this.getPoint(event);
+    const nextPoint = this.createStrokePoint(point.x, point.y, performance.now(), this.lastPoint);
+    this.drawSegment(this.lastPoint, nextPoint);
+    this.lastPoint = nextPoint;
     if (performance.now() - this.lastContentNotifyAt >= 120) {
       this.lastContentNotifyAt = performance.now();
       this.onContentChanged?.();
@@ -216,21 +276,45 @@ var HandwritingCanvas = class {
     }
     this.isDrawing = false;
     this.activePointerId = null;
-    this.ctx.closePath();
+    this.lastPoint = null;
     this.canvas.releasePointerCapture(event.pointerId);
     this.lastContentNotifyAt = performance.now();
     this.onContentChanged?.();
   };
+  createStrokePoint(x, y, time, previous) {
+    const distance = Math.hypot(x - previous.x, y - previous.y);
+    const elapsed = Math.max(8, time - previous.time);
+    const speed = distance / elapsed;
+    const targetWidth = clamp(this.maxStrokeWidth - speed * 18, this.minStrokeWidth, this.maxStrokeWidth);
+    const width = previous.width * 0.7 + targetWidth * 0.3;
+    return { x, y, time, width };
+  }
+  drawSegment(previous, next) {
+    this.ctx.save();
+    this.ctx.lineCap = "round";
+    this.ctx.lineJoin = "round";
+    this.ctx.strokeStyle = "#18110b";
+    this.ctx.lineWidth = (previous.width + next.width) * 0.5;
+    this.ctx.beginPath();
+    this.ctx.moveTo(previous.x, previous.y);
+    this.ctx.lineTo(next.x, next.y);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+  drawDot(x, y, radius) {
+    this.ctx.save();
+    this.ctx.fillStyle = "#18110b";
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius * 0.5, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.restore();
+  }
   getPoint(event) {
     const rect = this.canvas.getBoundingClientRect();
     return {
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
-  }
-  scaleBrush(pressure) {
-    const safePressure = pressure > 0 ? pressure : 0.65;
-    return this.brushSize * (0.7 + safePressure * 0.4);
   }
   paintBackground() {
     this.ctx.save();
@@ -241,6 +325,9 @@ var HandwritingCanvas = class {
     this.ctx.fillRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
   }
 };
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
 async function loadImage(dataUrl) {
   const image = new Image();
   await new Promise((resolve, reject) => {
@@ -250,6 +337,78 @@ async function loadImage(dataUrl) {
   });
   return image;
 }
+
+// src/app/HandwrittenClassifierClient.ts
+var HandwrittenClassifierClient = class {
+  worker;
+  readyPromise = null;
+  pending = /* @__PURE__ */ new Map();
+  constructor() {
+    this.worker = new Worker(new URL("./workers/handwritten-classifier.worker.js", import.meta.url), { type: "module" });
+    this.worker.addEventListener("message", this.onMessage);
+  }
+  async initialize(manifest, modelBuffer, labels) {
+    if (this.readyPromise) {
+      return await this.readyPromise;
+    }
+    this.readyPromise = new Promise((resolve, reject) => {
+      const handleMessage = (event) => {
+        if (event.data.type === "ready") {
+          this.worker.removeEventListener("message", handleMessage);
+          resolve();
+        } else if (event.data.type === "error" && !event.data.requestId) {
+          this.worker.removeEventListener("message", handleMessage);
+          reject(new Error(event.data.message));
+        }
+      };
+      this.worker.addEventListener("message", handleMessage);
+      const payload = {
+        type: "initialize",
+        manifest,
+        modelBuffer,
+        labels
+      };
+      this.worker.postMessage(payload, [modelBuffer]);
+    });
+    return await this.readyPromise;
+  }
+  async recognize(imageData) {
+    const requestId = crypto.randomUUID();
+    return await new Promise((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+      const payload = {
+        type: "recognize",
+        requestId,
+        imageData
+      };
+      this.worker.postMessage(payload);
+    });
+  }
+  dispose() {
+    this.worker.terminate();
+    this.pending.clear();
+  }
+  onMessage = (event) => {
+    const message = event.data;
+    if (message.type === "recognized") {
+      const pending = this.pending.get(message.requestId);
+      if (!pending) {
+        return;
+      }
+      this.pending.delete(message.requestId);
+      pending.resolve(message.result);
+      return;
+    }
+    if (message.type === "error" && message.requestId) {
+      const pending = this.pending.get(message.requestId);
+      if (!pending) {
+        return;
+      }
+      this.pending.delete(message.requestId);
+      pending.reject(new Error(message.message));
+    }
+  };
+};
 
 // src/app/KanaTemplateRecognizer.ts
 var HIRAGANA = "\u3041\u3042\u3043\u3044\u3045\u3046\u3047\u3048\u3049\u304A\u304B\u304C\u304D\u304E\u304F\u3050\u3051\u3052\u3053\u3054\u3055\u3056\u3057\u3058\u3059\u305A\u305B\u305C\u305D\u305E\u305F\u3060\u3061\u3062\u3063\u3064\u3065\u3066\u3067\u3068\u3069\u306A\u306B\u306C\u306D\u306E\u306F\u3070\u3071\u3072\u3073\u3074\u3075\u3076\u3077\u3078\u3079\u307A\u307B\u307C\u307D\u307E\u307F\u3080\u3081\u3082\u3083\u3084\u3085\u3086\u3087\u3088\u3089\u308A\u308B\u308C\u308D\u308E\u308F\u3090\u3091\u3092\u3093\u3094\u3095\u3096\u309D\u309E";
@@ -295,23 +454,28 @@ var KanaTemplateRecognizer = class {
     if (groups.length === 0 || groups.length > 4) {
       return null;
     }
-    const characters = [];
-    const scores = [];
+    const topCandidatesByGroup = [];
     for (const group of groups) {
       const bitmap = normalizeMaskToTemplate(mask, imageData.width, imageData.height, group);
       const rowProfile = buildRowProfile(bitmap);
       const colProfile = buildColProfile(bitmap);
-      const best = findBestTemplateMatch(bitmap, rowProfile, colProfile, this.templates);
+      const candidates = findTopTemplateMatches(bitmap, rowProfile, colProfile, this.templates, 4);
+      const best = candidates[0];
       if (!best || best.score < 0.42) {
         return null;
       }
-      characters.push(best.char);
-      scores.push(best.score);
+      topCandidatesByGroup.push(candidates);
+    }
+    const suggestions = combineSuggestions(topCandidatesByGroup).slice(0, 5);
+    const bestSuggestion = suggestions[0];
+    if (!bestSuggestion) {
+      return null;
     }
     return {
-      text: characters.join(""),
-      score: scores.reduce((sum, value) => sum + value, 0) / scores.length,
-      characterCount: characters.length
+      text: bestSuggestion.text,
+      score: bestSuggestion.score,
+      characterCount: groups.length,
+      suggestions
     };
   }
 };
@@ -335,20 +499,44 @@ function renderCharacterTemplate(char, fontStack) {
   const bounds = mergeComponents(components);
   return bounds ? normalizeMaskToTemplate(mask, TEMPLATE_SIZE, TEMPLATE_SIZE, bounds) : new Uint8Array(TEMPLATE_SIZE * TEMPLATE_SIZE);
 }
-function findBestTemplateMatch(bitmap, rowProfile, colProfile, templates) {
-  let bestChar = "";
-  let bestScore = -1;
+function findTopTemplateMatches(bitmap, rowProfile, colProfile, templates, limit) {
+  const scores = /* @__PURE__ */ new Map();
   for (const template of templates) {
     const iou = bitmapIoU(bitmap, template.bitmap);
     const rowDistance = profileDistance(rowProfile, template.rowProfile);
     const colDistance = profileDistance(colProfile, template.colProfile);
     const score = iou * 0.72 + (1 - rowDistance) * 0.14 + (1 - colDistance) * 0.14;
-    if (score > bestScore) {
-      bestScore = score;
-      bestChar = template.char;
+    const previous = scores.get(template.char) ?? Number.NEGATIVE_INFINITY;
+    if (score > previous) {
+      scores.set(template.char, score);
     }
   }
-  return bestChar ? { char: bestChar, score: bestScore } : null;
+  return [...scores.entries()].map(([char, score]) => ({ char, score })).sort((left, right) => right.score - left.score).slice(0, limit);
+}
+function combineSuggestions(groups, limit = 8) {
+  let suggestions = [{ text: "", score: 1 }];
+  for (const group of groups) {
+    const next = [];
+    for (const prefix of suggestions) {
+      for (const candidate of group) {
+        const prefixLength = [...prefix.text].length;
+        const nextLength = prefixLength + 1;
+        next.push({
+          text: prefix.text + candidate.char,
+          score: (prefix.score * prefixLength + candidate.score) / nextLength
+        });
+      }
+    }
+    suggestions = next.sort((left, right) => right.score - left.score).slice(0, limit);
+  }
+  const unique = /* @__PURE__ */ new Map();
+  for (const suggestion of suggestions) {
+    const existing = unique.get(suggestion.text);
+    if (!existing || suggestion.score > existing.score) {
+      unique.set(suggestion.text, suggestion);
+    }
+  }
+  return [...unique.values()].sort((left, right) => right.score - left.score);
 }
 function groupComponentsIntoCharacters(components) {
   const sorted = [...components].sort((left, right) => left.left - right.left || left.top - right.top);
@@ -659,7 +847,7 @@ var OcrWorkerClient = class {
 var WASM_BINARY_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString();
 var WASM_MODULE_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.mjs", import.meta.url).toString();
 var LIVE_PREVIEW_MANIFEST = {
-  modelLabel: "PP-OCRv5 Mobile",
+  modelLabel: "preview",
   modelUrl: new URL("./assets/ocr/mobile/rec.onnx", import.meta.url).toString(),
   dictionaryUrl: new URL("./assets/ocr/mobile/dict.txt", import.meta.url).toString(),
   wasmBinaryUrl: WASM_BINARY_URL,
@@ -669,7 +857,7 @@ var LIVE_PREVIEW_MANIFEST = {
   cacheVersion: "ppocrv5-mobile-ja-v2"
 };
 var ACCURATE_RECOGNITION_MANIFEST = {
-  modelLabel: "PP-OCRv5 Server",
+  modelLabel: "final",
   modelUrl: new URL("./assets/ocr/server/rec.onnx", import.meta.url).toString(),
   dictionaryUrl: new URL("./assets/ocr/server/dict.txt", import.meta.url).toString(),
   wasmBinaryUrl: WASM_BINARY_URL,
@@ -678,34 +866,39 @@ var ACCURATE_RECOGNITION_MANIFEST = {
   maxInputWidth: 640,
   cacheVersion: "ppocrv5-ch-ja-server-v3"
 };
+var HANDWRITTEN_CLASSIFIER_MANIFEST = {
+  modelUrl: new URL("./assets/handwritten/kanjidnn/model.onnx", import.meta.url).toString(),
+  labelsUrl: new URL("./assets/handwritten/kanjidnn/labels.txt", import.meta.url).toString(),
+  wasmBinaryUrl: WASM_BINARY_URL,
+  wasmModuleUrl: WASM_MODULE_URL,
+  cacheVersion: "kanjidnn-ja-v1"
+};
 var HandwriteSearchApp = class {
   database = new AppDatabase();
   previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
   accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
+  classifierAssets = new ClassifierAssetService(this.database, HANDWRITTEN_CLASSIFIER_MANIFEST);
   kanaRecognizer = new KanaTemplateRecognizer();
   previewWorker = new OcrWorkerClient();
   accurateWorker = new OcrWorkerClient();
+  classifierWorker = new HandwrittenClassifierClient();
   root = document.createElement("main");
   canvasElement = document.createElement("canvas");
   canvasController = new HandwritingCanvas(this.canvasElement);
-  recognizeButton = createButton("\u8A8D\u8B58\u3059\u308B", "button button-primary");
-  clearButton = createButton("\u6D88\u53BB", "button button-secondary");
-  saveButton = createButton("\u3044\u307E\u306E\u72B6\u614B\u3092\u4FDD\u5B58", "button button-ghost");
-  clearHistoryButton = createButton("\u5C65\u6B74\u3092\u524A\u9664", "button button-ghost");
-  statusLabel = document.createElement("div");
-  progressLabel = document.createElement("div");
-  brushInput = document.createElement("input");
-  brushOutput = document.createElement("output");
+  recognizeButton = createButton("\u3088\u307F\u3068\u308B", "button button-primary");
+  clearButton = createButton("\u3051\u3059", "button button-secondary");
+  statusLabel = document.createElement("p");
   previewText = document.createElement("pre");
   previewMeta = document.createElement("p");
   resultText = document.createElement("pre");
   resultMeta = document.createElement("p");
-  historyList = document.createElement("div");
-  modelBadge = document.createElement("span");
+  suggestionList = document.createElement("div");
   currentResult = null;
   previewReady = false;
   accurateReady = false;
+  classifierReady = false;
   accurateReadyPromise = null;
+  classifierReadyPromise = null;
   previewTimer = null;
   previewGeneration = 0;
   previewRunning = false;
@@ -718,76 +911,46 @@ var HandwriteSearchApp = class {
     this.canvasController.setContentChangedListener(() => {
       this.handleCanvasChanged();
     });
-    await this.renderHistory();
     await this.initializeRecognizers();
     const resizeObserver = new ResizeObserver(() => this.canvasController.resize());
     resizeObserver.observe(this.canvasElement);
   }
   buildLayout() {
-    const hero = section("hero");
-    const heroCopy = div("hero-copy");
-    heroCopy.append(
-      chip("IndexedDB handwriting lab"),
-      heading("hero-title", "\u6F22\u5B57\u624B\u66F8\u304D\u691C\u7D22\u30C4\u30FC\u30EB"),
-      paragraph(
-        "hero-lead",
-        "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u30D7\u30EC\u30D3\u30E5\u30FC\u3068\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306E\u6700\u7D42\u8A8D\u8B58\u3092\u7D44\u307F\u5408\u308F\u305B\u3066\u3001\u304B\u306A\u30FB\u30AB\u30CA\u30FB\u6F22\u5B57\u3092\u77ED\u6587\u4E2D\u5FC3\u306B\u8AAD\u307F\u53D6\u308C\u308B\u3088\u3046\u8ABF\u6574\u3057\u3066\u3044\u307E\u3059\u3002\u63CF\u753B\u5C65\u6B74\u3068OCR\u7D50\u679C\u306F\u30D6\u30E9\u30A6\u30B6\u5185\u306B\u4FDD\u5B58\u3055\u308C\u307E\u3059\u3002"
-      ),
-      this.buildStatusStrip()
+    const header = section("app-header");
+    header.append(
+      heading("app-title", "\u3066\u304C\u304D\u3067 \u3057\u3089\u3079\u308B"),
+      paragraph("app-lead", "\u304A\u304A\u304D\u304F 1\u301C4\u3082\u3058 \u304F\u3089\u3044 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002\u304B\u306A \u3082 \u6F22\u5B57 \u3082 \u3088\u3081\u308B\u3088\u3046\u306B\u3057\u3066\u3044\u307E\u3059\u3002"),
+      this.buildSteps(),
+      this.buildStatus()
     );
-    hero.append(heroCopy);
-    const dashboard = div("dashboard");
-    dashboard.append(this.buildCanvasPanel(), this.buildResultPanel());
-    this.root.append(hero, dashboard);
+    const layout = div("app-layout");
+    layout.append(this.buildCanvasPanel(), this.buildResultPanel());
+    this.root.append(header, layout);
   }
-  buildStatusStrip() {
-    const strip = div("status-strip");
-    this.statusLabel.className = "status-pill";
-    this.statusLabel.textContent = "\u6E96\u5099\u4E2D\u2026";
-    this.modelBadge.className = "status-pill";
-    this.modelBadge.textContent = "\u30E2\u30C7\u30EB: \u8EFD\u91CF PP-OCRv5 Mobile / \u9AD8\u7CBE\u5EA6 PP-OCRv5 Server";
-    this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T06:14:55.107Z")).toLocaleString("ja-JP")}`;
-    strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
-    return strip;
+  buildSteps() {
+    const steps = div("steps");
+    steps.append(
+      stepCard("1", "\u3053\u3053\u306B \u304B\u304F", "\u3086\u3063\u304F\u308A \u304A\u304A\u304D\u304F \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002"),
+      stepCard("2", "\u3088\u307F\u3068\u308B", "\u30DC\u30BF\u30F3\u3092 \u304A\u3059\u3068 \u3057\u3063\u304B\u308A \u305F\u3057\u304B\u3081\u307E\u3059\u3002"),
+      stepCard("3", "\u3048\u3089\u3076", "\u3061\u304C\u3046\u3068\u304D\u306F\u300C\u3082\u3057\u304B\u3057\u3066\u300D\u3092 \u3048\u3089\u3079\u307E\u3059\u3002")
+    );
+    return steps;
+  }
+  buildStatus() {
+    const status = div("status-box");
+    this.statusLabel.className = "status-text";
+    this.statusLabel.textContent = "\u3058\u3085\u3093\u3073\u3057\u3066\u3044\u307E\u3059\u2026";
+    status.append(this.statusLabel);
+    return status;
   }
   buildCanvasPanel() {
-    const panel = div("panel");
-    const inner = div("panel-inner");
-    inner.append(
-      panelHeader(
-        "\u66F8\u3044\u3066\u8A8D\u8B58\u3059\u308B",
-        "1\u301C4\u6587\u5B57\u4E2D\u5FC3\u3001\u6700\u592710\u6587\u5B57\u7A0B\u5EA6\u306E\u304B\u306A\u30FB\u30AB\u30CA\u30FB\u6F22\u5B57\u3092\u60F3\u5B9A\u3057\u3066\u3044\u307E\u3059\u3002\u6700\u7D42\u8A8D\u8B58\u3067\u306F\u8EFD\u91CF/\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306E\u4E21\u65B9\u3092\u6BD4\u8F03\u3057\u307E\u3059\u3002"
-      ),
-      this.buildToolbar(),
+    const panel = div("card");
+    panel.append(
+      panelHeading("\u304B\u304F \u3068\u3053\u308D", "\u307E\u3093\u306A\u304B\u306B 1\u301C4\u3082\u3058 \u304F\u3089\u3044 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002"),
       this.buildCanvasFrame(),
-      hintRow([
-        "\u63CF\u753B\u4E2D\u306F\u8EFD\u91CF\u30E2\u30C7\u30EB\u3067\u81EA\u52D5\u30D7\u30EC\u30D3\u30E5\u30FC",
-        "\u78BA\u5B9A\u6642\u306F2\u30E2\u30C7\u30EB\u3092\u6BD4\u8F03\u3057\u3066\u63A1\u7528",
-        "\u7D50\u679C\u3068\u30B5\u30E0\u30CD\u30A4\u30EB\u306FIndexedDB\u306B\u4FDD\u5B58"
-      ]),
-      actionsRow(this.recognizeButton, this.clearButton, this.saveButton)
+      actionsRow(this.recognizeButton, this.clearButton)
     );
-    panel.append(inner);
     return panel;
-  }
-  buildToolbar() {
-    const toolbar = div("toolbar");
-    const brushGroup = div("toolbar-group");
-    const brushLabel = document.createElement("label");
-    brushLabel.textContent = "\u7B46\u5727";
-    brushLabel.htmlFor = "brush-size";
-    this.brushInput.type = "range";
-    this.brushInput.id = "brush-size";
-    this.brushInput.min = "8";
-    this.brushInput.max = "28";
-    this.brushInput.step = "1";
-    this.brushInput.value = "16";
-    this.brushOutput.value = this.brushInput.value;
-    this.brushOutput.textContent = this.brushInput.value;
-    brushGroup.append(brushLabel, this.brushInput, this.brushOutput);
-    toolbar.append(brushGroup);
-    return toolbar;
   }
   buildCanvasFrame() {
     const frame = div("canvas-frame");
@@ -796,57 +959,37 @@ var HandwriteSearchApp = class {
     return frame;
   }
   buildResultPanel() {
-    const panel = div("panel");
-    const inner = div("panel-inner");
-    const footer = paragraph(
-      "footer-note",
-      "PP-OCR \u7CFB\u30E2\u30C7\u30EB\u306F1\u884C\u8A8D\u8B58\u30D9\u30FC\u30B9\u3067\u3059\u3002\u30DA\u30FC\u30B8\u5074\u3067\u884C\u5206\u5272\u3057\u3066\u304B\u3089\u63A8\u8AD6\u3057\u3001\u77ED\u3044\u65E5\u672C\u8A9E\u6587\u5B57\u5217\u5411\u3051\u306B\u30B9\u30B3\u30A2\u30EA\u30F3\u30B0\u3057\u3066\u6700\u7D42\u5019\u88DC\u3092\u9078\u3073\u307E\u3059\u3002"
+    const panel = div("card result-card");
+    const previewCard = div("result-box result-box-preview");
+    previewCard.append(
+      label("box-label", "\u3044\u307E\u306E \u3088\u305D\u3046"),
+      this.previewText,
+      this.previewMeta
     );
-    const previewCard = div("result-card result-card-preview");
-    const previewLabel = document.createElement("p");
-    previewLabel.className = "result-label";
-    previewLabel.textContent = "Live Preview";
     this.previewText.className = "result-text result-text-preview";
-    this.previewText.textContent = "\u307E\u3060\u30D7\u30EC\u30D3\u30E5\u30FC\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
-    this.previewMeta.className = "result-meta";
-    this.previewMeta.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u6E96\u5099\u5F8C\u3001\u63CF\u753B\u306B\u5408\u308F\u305B\u3066\u5019\u88DC\u3092\u81EA\u52D5\u66F4\u65B0\u3057\u307E\u3059\u3002";
-    previewCard.append(previewLabel, this.previewText, this.previewMeta);
-    const resultCard = div("result-card");
-    const resultLabel = document.createElement("p");
-    resultLabel.className = "result-label";
-    resultLabel.textContent = "Final Recognition";
+    this.previewText.textContent = "\u307E\u3060 \u307F\u3066\u3044\u307E\u305B\u3093\u3002";
+    this.previewMeta.className = "result-note";
+    this.previewMeta.textContent = "\u304B\u304D\u306F\u3058\u3081\u308B\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
+    const finalCard = div("result-box");
+    finalCard.append(
+      label("box-label", "\u3051\u3063\u304B"),
+      this.resultText,
+      this.resultMeta,
+      this.suggestionList
+    );
     this.resultText.className = "result-text";
-    this.resultText.textContent = "\u307E\u3060\u8A8D\u8B58\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
-    this.resultMeta.className = "result-meta";
-    this.resultMeta.textContent = "\u9AD8\u7CBE\u5EA6\u8A8D\u8B58\u306F\u30E2\u30C7\u30EB\u6E96\u5099\u5F8C\u306B\u300C\u8A8D\u8B58\u3059\u308B\u300D\u3067\u5B9F\u884C\u3055\u308C\u307E\u3059\u3002";
-    resultCard.append(resultLabel, this.resultText, this.resultMeta);
-    const historyHeader = panelHeader(
-      "\u5C65\u6B74",
-      "\u30B5\u30E0\u30CD\u30A4\u30EB\u3068\u8A8D\u8B58\u7D50\u679C\u3092\u30D6\u30E9\u30A6\u30B6\u5185\u306B\u4FDD\u5B58\u3057\u307E\u3059\u3002\u30AF\u30EA\u30C3\u30AF\u3067\u30AD\u30E3\u30F3\u30D0\u30B9\u3078\u623B\u305B\u307E\u3059\u3002"
+    this.resultText.textContent = "\u307E\u3060 \u3088\u3093\u3067\u3044\u307E\u305B\u3093\u3002";
+    this.resultMeta.className = "result-note";
+    this.resultMeta.textContent = "\u300C\u3088\u307F\u3068\u308B\u300D\u3092 \u304A\u3059\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
+    this.suggestionList.className = "suggestion-list";
+    panel.append(
+      panelHeading("\u3088\u307F\u3068\u308A", "\u307E\u3061\u304C\u3063\u3066\u3044\u305F\u3089\u3001\u4E0B\u306E\u5019\u88DC\u3092 \u3048\u3089\u3079\u307E\u3059\u3002"),
+      previewCard,
+      finalCard
     );
-    const historyActions = actionsRow(this.clearHistoryButton);
-    this.historyList.className = "history-list";
-    inner.append(
-      panelHeader(
-        "\u8A8D\u8B58\u7D50\u679C",
-        "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306F\u8FFD\u5F93\u6027\u3092\u512A\u5148\u3001\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306F\u78BA\u5B9A\u7CBE\u5EA6\u3092\u512A\u5148\u3057\u307E\u3059\u3002\u6700\u7D42\u8868\u793A\u306B\u306F\u4E21\u65B9\u306E\u5019\u88DC\u3092\u6BD4\u8F03\u3057\u305F\u63A1\u7528\u7D50\u679C\u3092\u51FA\u3057\u307E\u3059\u3002"
-      ),
-      div("result-stack", previewCard, resultCard),
-      historyHeader,
-      historyActions,
-      this.historyList,
-      footer
-    );
-    panel.append(inner);
     return panel;
   }
   bindEvents() {
-    this.brushInput.addEventListener("input", () => {
-      const nextBrush = Number(this.brushInput.value);
-      this.brushOutput.value = String(nextBrush);
-      this.brushOutput.textContent = String(nextBrush);
-      this.canvasController.setBrushSize(nextBrush);
-    });
     this.recognizeButton.addEventListener("click", async () => {
       await this.runRecognition();
     });
@@ -855,38 +998,32 @@ var HandwriteSearchApp = class {
       this.cancelPendingPreview();
       this.currentResult = null;
       this.previewGeneration += 1;
-      this.previewText.textContent = "\u307E\u3060\u30D7\u30EC\u30D3\u30E5\u30FC\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
-      this.previewMeta.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u306F\u65B0\u3057\u3044\u5165\u529B\u3092\u5F85\u6A5F\u3057\u3066\u3044\u307E\u3059\u3002";
-      this.resultText.textContent = "\u307E\u3060\u8A8D\u8B58\u3057\u3066\u3044\u307E\u305B\u3093\u3002";
-      this.resultMeta.textContent = "\u30AD\u30E3\u30F3\u30D0\u30B9\u3092\u6D88\u53BB\u3057\u307E\u3057\u305F\u3002";
-      this.setStatus("\u30AD\u30E3\u30F3\u30D0\u30B9\u3092\u6D88\u53BB\u3057\u307E\u3057\u305F\u3002");
-    });
-    this.saveButton.addEventListener("click", async () => {
-      await this.saveCurrentSnapshot();
-    });
-    this.clearHistoryButton.addEventListener("click", async () => {
-      await this.database.clearSessions();
-      await this.renderHistory();
-      this.setStatus("\u5C65\u6B74\u3092\u524A\u9664\u3057\u307E\u3057\u305F\u3002");
+      this.previewText.textContent = "\u307E\u3060 \u307F\u3066\u3044\u307E\u305B\u3093\u3002";
+      this.previewMeta.textContent = "\u304B\u304D\u306F\u3058\u3081\u308B\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
+      this.resultText.textContent = "\u307E\u3060 \u3088\u3093\u3067\u3044\u307E\u305B\u3093\u3002";
+      this.resultMeta.textContent = "\u3082\u3046\u4E00\u5EA6 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002";
+      this.renderSuggestions([]);
+      this.setStatus("\u3051\u3057\u307E\u3057\u305F\u3002\u3082\u3046\u4E00\u5EA6 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
     });
   }
   async initializeRecognizers() {
-    this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u7528\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u3057\u3066\u3044\u307E\u3059\u2026");
+    this.setStatus("\u306F\u3058\u3081\u308B \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026");
     this.setBusy(true);
     try {
       const [modelBuffer, dictionary] = await Promise.all([
-        this.previewAssets.getModelBuffer((message) => this.setStatus(`\u8EFD\u91CF\u30E2\u30C7\u30EB: ${message}`)),
-        this.previewAssets.getDictionary((message) => this.setStatus(`\u8EFD\u91CF\u30E2\u30C7\u30EB: ${message}`))
+        this.previewAssets.getModelBuffer(() => this.setStatus("\u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026")),
+        this.previewAssets.getDictionary(() => this.setStatus("\u3053\u3068\u3070\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026"))
       ]);
       await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
       this.previewReady = true;
-      this.previewMeta.textContent = "\u63CF\u753B\u306B\u5FDC\u3058\u3066\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u5019\u88DC\u3092\u81EA\u52D5\u66F4\u65B0\u3057\u307E\u3059\u3002";
       this.kanaRecognizer.initialize();
-      this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u6E96\u5099\u5B8C\u4E86\u3002\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3092\u30D0\u30C3\u30AF\u30B0\u30E9\u30A6\u30F3\u30C9\u3067\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u2026");
+      this.previewMeta.textContent = "\u304B\u304F\u305F\u3073\u306B \u3053\u3053\u3092 \u307F\u307E\u3059\u3002";
+      this.setStatus("\u304B\u3051\u307E\u3059\u3002\u300C\u3088\u307F\u3068\u308B\u300D\u3092 \u304A\u3059\u3068 \u3057\u3063\u304B\u308A \u305F\u3057\u304B\u3081\u307E\u3059\u3002");
       void this.prepareAccurateRecognizer().catch(() => void 0);
+      void this.prepareHandwrittenClassifier().catch(() => void 0);
     } catch (error) {
       console.error(error);
-      this.setStatus(`\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u521D\u671F\u5316\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u3058\u3085\u3093\u3073\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
     } finally {
       this.setBusy(false);
     }
@@ -897,32 +1034,57 @@ var HandwriteSearchApp = class {
     }
     this.accurateReadyPromise = (async () => {
       const [modelBuffer, dictionary] = await Promise.all([
-        this.accurateAssets.getModelBuffer((message) => this.setStatus(`\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB: ${message}`)),
-        this.accurateAssets.getDictionary((message) => this.setStatus(`\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB: ${message}`))
+        this.accurateAssets.getModelBuffer(),
+        this.accurateAssets.getDictionary()
       ]);
       await this.accurateWorker.initialize(ACCURATE_RECOGNITION_MANIFEST, modelBuffer, dictionary);
       this.accurateReady = true;
-      this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u3068\u9AD8\u7CBE\u5EA6\u8A8D\u8B58\u306E\u4E21\u65B9\u304C\u6E96\u5099\u3067\u304D\u307E\u3057\u305F\u3002");
     })().catch((error) => {
       this.accurateReady = false;
       this.accurateReadyPromise = null;
       console.error(error);
-      this.setStatus(`\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306E\u521D\u671F\u5316\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u304F\u308F\u3057\u3044 \u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
       throw error;
     });
     return this.accurateReadyPromise;
   }
+  prepareHandwrittenClassifier() {
+    if (this.classifierReadyPromise) {
+      return this.classifierReadyPromise;
+    }
+    this.classifierReadyPromise = (async () => {
+      const [modelBuffer, labels] = await Promise.all([
+        this.classifierAssets.getModelBuffer(),
+        this.classifierAssets.getLabels()
+      ]);
+      await this.classifierWorker.initialize(HANDWRITTEN_CLASSIFIER_MANIFEST, modelBuffer, labels);
+      this.classifierReady = true;
+    })().catch((error) => {
+      this.classifierReady = false;
+      this.classifierReadyPromise = null;
+      console.error(error);
+      this.setStatus(`\u624B\u66F8\u304D\u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
+      throw error;
+    });
+    return this.classifierReadyPromise;
+  }
   handleCanvasChanged() {
     this.currentResult = null;
-    this.resultText.textContent = "\u624B\u66F8\u304D\u304C\u66F4\u65B0\u3055\u308C\u307E\u3057\u305F\u3002";
-    this.resultMeta.textContent = this.accurateReady ? "\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u66F4\u65B0\u3057\u3066\u3044\u307E\u3059\u3002\u78BA\u5B9A\u3059\u308B\u306B\u306F\u300C\u8A8D\u8B58\u3059\u308B\u300D\u3092\u62BC\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : "\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u66F4\u65B0\u3057\u3066\u3044\u307E\u3059\u3002\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3082\u6E96\u5099\u4E2D\u3067\u3059\u3002";
-    if (!this.previewReady) {
-      this.previewText.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u4E2D\u3067\u3059\u2026";
-      this.previewMeta.textContent = "\u6E96\u5099\u3067\u304D\u6B21\u7B2C\u3001\u63CF\u753B\u306B\u8FFD\u5F93\u3057\u3066\u5019\u88DC\u3092\u51FA\u3057\u307E\u3059\u3002";
+    this.resultText.textContent = "\u307E\u3060 \u3088\u3093\u3067\u3044\u307E\u305B\u3093\u3002";
+    this.resultMeta.textContent = "\u300C\u3088\u307F\u3068\u308B\u300D\u3092 \u304A\u3059\u3068 \u3057\u3063\u304B\u308A \u305F\u3057\u304B\u3081\u307E\u3059\u3002";
+    this.renderSuggestions([]);
+    if (this.canvasController.strokeCount === 0) {
+      this.previewText.textContent = "\u307E\u3060 \u307F\u3066\u3044\u307E\u305B\u3093\u3002";
+      this.previewMeta.textContent = "\u304B\u304D\u306F\u3058\u3081\u308B\u3068 \u3053\u3053\u306B \u3067\u307E\u3059\u3002";
       return;
     }
-    this.previewText.textContent = "\u30D7\u30EC\u30D3\u30E5\u30FC\u3092\u66F4\u65B0\u3057\u3066\u3044\u307E\u3059\u2026";
-    this.previewMeta.textContent = "\u8EFD\u91CF\u30E2\u30C7\u30EB\u3067\u6700\u65B0\u30B9\u30C8\u30ED\u30FC\u30AF\u3092\u78BA\u8A8D\u4E2D\u3067\u3059\u3002";
+    if (!this.previewReady) {
+      this.previewText.textContent = "\u3058\u3085\u3093\u3073\u3057\u3066\u3044\u307E\u3059\u2026";
+      this.previewMeta.textContent = "\u3082\u3046\u5C11\u3057 \u304A\u307E\u3061\u304F\u3060\u3055\u3044\u3002";
+      return;
+    }
+    this.previewText.textContent = "\u307F\u3066\u3044\u307E\u3059\u2026";
+    this.previewMeta.textContent = "\u3044\u307E\u306E \u304B\u305F\u3061\u3092 \u304B\u304F\u306B\u3093\u3057\u3066\u3044\u307E\u3059\u3002";
     this.schedulePreviewRecognition();
   }
   schedulePreviewRecognition() {
@@ -950,23 +1112,20 @@ var HandwriteSearchApp = class {
     }
     this.previewRunning = true;
     try {
-      const result = await this.previewWorker.recognize(this.canvasController.exportImageData());
-      const kanaResult = this.kanaRecognizer.recognize(this.canvasController.exportImageData());
+      const imageData = this.canvasController.exportImageData();
+      const result = await this.previewWorker.recognize(imageData);
+      const kanaResult = this.kanaRecognizer.recognize(imageData);
       if (generation !== this.previewGeneration) {
         return;
       }
-      if (kanaResult) {
-        this.previewText.textContent = kanaResult.text;
-        this.previewMeta.textContent = `\u304B\u306A\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8 / ${kanaResult.characterCount}\u6587\u5B57 / \u30B9\u30B3\u30A2 ${(kanaResult.score * 100).toFixed(1)}%`;
-      } else {
-        this.previewText.textContent = result.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
-        this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${result.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
-      }
+      const previewText = kanaResult?.text || result.text || "\u307E\u3060 \u308F\u304B\u308A\u307E\u305B\u3093\u3002";
+      this.previewText.textContent = previewText;
+      this.previewMeta.textContent = kanaResult ? "\u304B\u306A\u3068\u3057\u3066\u306F \u3053\u306E\u3088\u3046\u306B \u898B\u3048\u307E\u3059\u3002" : previewText === "\u307E\u3060 \u308F\u304B\u308A\u307E\u305B\u3093\u3002" ? "\u3082\u3046\u5C11\u3057 \u304A\u304A\u304D\u304F \u304B\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u3044\u307E\u306F \u3053\u306E\u3088\u3046\u306B \u898B\u3048\u307E\u3059\u3002";
     } catch (error) {
       console.error(error);
       if (generation === this.previewGeneration) {
-        this.previewText.textContent = "\u30D7\u30EC\u30D3\u30E5\u30FC\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
-        this.previewMeta.textContent = error.message;
+        this.previewText.textContent = "\u307F\u3089\u308C\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
+        this.previewMeta.textContent = "\u3082\u3046\u4E00\u5EA6 \u305F\u3081\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
       }
     } finally {
       this.previewRunning = false;
@@ -978,12 +1137,16 @@ var HandwriteSearchApp = class {
   }
   async runRecognition() {
     if (!this.previewReady) {
-      this.setStatus("\u8EFD\u91CF\u30E2\u30C7\u30EB\u304C\u307E\u3060\u6E96\u5099\u3067\u304D\u3066\u3044\u307E\u305B\u3093\u3002");
+      this.setStatus("\u307E\u3060 \u3058\u3085\u3093\u3073\u4E2D\u3067\u3059\u3002\u5C11\u3057 \u304A\u307E\u3061\u304F\u3060\u3055\u3044\u3002");
+      return;
+    }
+    if (this.canvasController.strokeCount === 0) {
+      this.setStatus("\u307E\u305A \u3082\u3058\u3092 \u304B\u3044\u3066\u304F\u3060\u3055\u3044\u3002");
       return;
     }
     this.cancelPendingPreview();
     this.setBusy(true);
-    this.setStatus(this.accurateReady ? "\u8EFD\u91CF + \u9AD8\u7CBE\u5EA6OCR\u3092\u5B9F\u884C\u3057\u3066\u3044\u307E\u3059\u2026" : "\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3092\u6E96\u5099\u3057\u3064\u3064OCR\u3092\u5B9F\u884C\u3057\u3066\u3044\u307E\u3059\u2026");
+    this.setStatus("\u3088\u307F\u3068\u3063\u3066\u3044\u307E\u3059\u2026");
     try {
       const imageData = this.canvasController.exportImageData();
       const previewPromise = this.previewWorker.recognize(imageData);
@@ -992,127 +1155,80 @@ var HandwriteSearchApp = class {
         console.error(error);
         return null;
       });
-      const [previewResult, accurateResult] = await Promise.all([previewPromise, accuratePromise]);
-      const selection = selectBestRecognition(previewResult, accurateResult, kanaResult);
+      const handwrittenPromise = this.prepareHandwrittenClassifier().then(() => this.classifierWorker.recognize(imageData)).catch((error) => {
+        console.error(error);
+        return null;
+      });
+      const [previewResult, accurateResult, handwrittenResult] = await Promise.all([
+        previewPromise,
+        accuratePromise,
+        handwrittenPromise
+      ]);
+      const selection = selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult);
+      const suggestions = buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection);
       this.currentResult = selection.result;
-      if (kanaResult) {
-        this.previewText.textContent = kanaResult.text;
-        this.previewMeta.textContent = `\u304B\u306A\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8 / ${kanaResult.characterCount}\u6587\u5B57 / \u30B9\u30B3\u30A2 ${(kanaResult.score * 100).toFixed(1)}%`;
-      } else {
-        this.previewText.textContent = previewResult.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
-        this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${previewResult.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
-      }
-      this.resultText.textContent = selection.result.text || "\u6587\u5B57\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
-      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult, kanaResult);
-      const statusMessage = accurateResult ? `\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u63A1\u7528: ${selection.label}` : "\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306A\u3057\u3067\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002";
-      this.setStatus(statusMessage);
-      await this.saveCurrentSnapshot();
-      this.setStatus(statusMessage);
+      this.currentResult.suggestions = suggestions;
+      this.previewText.textContent = kanaResult?.text || previewResult.text || "\u307E\u3060 \u308F\u304B\u308A\u307E\u305B\u3093\u3002";
+      this.previewMeta.textContent = kanaResult ? "\u304B\u306A\u3068\u3057\u3066\u306F \u3053\u306E\u3088\u3046\u306B \u898B\u3048\u307E\u3059\u3002" : "\u3044\u307E\u306E \u3088\u305D\u3046\u3067\u3059\u3002";
+      const finalText = selection.result.text || "\u3088\u304F \u308F\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
+      this.resultText.textContent = finalText;
+      this.resultMeta.textContent = buildFinalMessage(finalText, suggestions.length);
+      this.renderSuggestions(suggestions);
+      this.setStatus(finalText === "\u3088\u304F \u308F\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002" ? "\u3082\u3046\u4E00\u5EA6 \u304A\u304A\u304D\u304F \u304B\u3044\u3066\u307F\u3066\u304F\u3060\u3055\u3044\u3002" : "\u3051\u3063\u304B\u3092 \u51FA\u3057\u307E\u3057\u305F\u3002");
     } catch (error) {
       console.error(error);
-      this.setStatus(`\u8A8D\u8B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${error.message}`);
+      this.setStatus(`\u3088\u307F\u3068\u308A\u306B \u3057\u3063\u3071\u3044\u3057\u307E\u3057\u305F: ${error.message}`);
     } finally {
       this.setBusy(false);
     }
   }
-  async saveCurrentSnapshot() {
-    const record = this.createSessionRecord();
-    await this.database.saveSession(record);
-    await this.renderHistory();
-    this.setStatus("\u63CF\u753B\u72B6\u614B\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002");
-  }
-  createSessionRecord() {
-    const now = Date.now();
-    return {
-      id: crypto.randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-      previewDataUrl: this.canvasController.toImageDataUrl(),
-      recognizedText: this.currentResult?.text ?? "",
-      averageConfidence: this.currentResult?.averageConfidence ?? 0,
-      lineCount: this.currentResult?.lines.length ?? 0,
-      strokeCount: this.canvasController.strokeCount,
-      brushSize: Number(this.brushInput.value),
-      canvasWidth: this.canvasController.width,
-      canvasHeight: this.canvasController.height
-    };
-  }
-  async renderHistory() {
-    const sessions = await this.database.listSessions();
-    this.historyList.replaceChildren();
-    if (sessions.length === 0) {
-      this.historyList.append(
-        paragraph("empty-state", "\u307E\u3060\u4FDD\u5B58\u3055\u308C\u305F\u5C65\u6B74\u306F\u3042\u308A\u307E\u305B\u3093\u3002\u8A8D\u8B58\u307E\u305F\u306F\u4FDD\u5B58\u3092\u884C\u3046\u3068\u3053\u3053\u306B\u4E26\u3073\u307E\u3059\u3002")
-      );
-      return;
-    }
-    for (const session of sessions) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "history-item";
-      const img = document.createElement("img");
-      img.className = "history-preview";
-      img.alt = "\u4FDD\u5B58\u3055\u308C\u305F\u624B\u66F8\u304D\u30D7\u30EC\u30D3\u30E5\u30FC";
-      img.src = session.previewDataUrl;
-      const body = div("history-body");
-      const time = document.createElement("time");
-      time.dateTime = new Date(session.updatedAt).toISOString();
-      time.textContent = new Date(session.updatedAt).toLocaleString("ja-JP");
-      const text = div("history-text");
-      text.textContent = session.recognizedText || "\u672A\u8A8D\u8B58\u306E\u4E0B\u66F8\u304D";
-      const meta = div("history-meta");
-      meta.textContent = `\u7DDA ${session.strokeCount} / \u884C ${session.lineCount} / \u4FE1\u983C\u5EA6 ${(session.averageConfidence * 100).toFixed(0)}%`;
-      body.append(time, text, meta);
-      button.append(img, body);
-      button.addEventListener("click", async () => {
-        await this.canvasController.restoreFromDataUrl(session.previewDataUrl);
-        this.brushInput.value = String(session.brushSize);
-        this.brushOutput.value = String(session.brushSize);
-        this.brushOutput.textContent = String(session.brushSize);
-        this.canvasController.setBrushSize(session.brushSize);
-        this.currentResult = {
-          text: session.recognizedText,
-          averageConfidence: session.averageConfidence,
-          elapsedMs: 0,
-          lines: []
-        };
-        this.previewGeneration += 1;
-        this.previewText.textContent = session.recognizedText || "\u4FDD\u5B58\u6642\u70B9\u3067\u306F\u672A\u8A8D\u8B58\u3067\u3057\u305F\u3002";
-        this.previewMeta.textContent = `${new Date(session.updatedAt).toLocaleString("ja-JP")} \u306E\u4FDD\u5B58\u5185\u5BB9\u3067\u3059\u3002`;
-        this.resultText.textContent = session.recognizedText || "\u4FDD\u5B58\u6642\u70B9\u3067\u306F\u672A\u8A8D\u8B58\u3067\u3057\u305F\u3002";
-        this.resultMeta.textContent = `${new Date(session.updatedAt).toLocaleString("ja-JP")} \u306E\u4FDD\u5B58\u5185\u5BB9\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F\u3002`;
-        this.setStatus("\u5C65\u6B74\u304B\u3089\u30AD\u30E3\u30F3\u30D0\u30B9\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F\u3002");
-      });
-      this.historyList.append(button);
-    }
-  }
   setBusy(isBusy) {
     this.recognizeButton.disabled = isBusy;
-    this.saveButton.disabled = isBusy;
-    this.clearHistoryButton.disabled = isBusy;
+    this.clearButton.disabled = isBusy;
   }
   setStatus(message) {
     this.statusLabel.textContent = message;
   }
+  renderSuggestions(suggestions) {
+    this.suggestionList.replaceChildren();
+    if (suggestions.length === 0) {
+      return;
+    }
+    const labelElement = label("suggestion-label", "\u3082\u3057\u304B\u3057\u3066");
+    this.suggestionList.append(labelElement);
+    for (const suggestion of suggestions.slice(0, 5)) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "suggestion-chip";
+      chip.textContent = suggestion.text;
+      chip.title = suggestion.source;
+      chip.addEventListener("click", () => {
+        this.resultText.textContent = suggestion.text;
+        this.resultMeta.textContent = "\u3048\u3089\u3093\u3060\u5019\u88DC\u3092 \u8868\u793A\u3057\u3066\u3044\u307E\u3059\u3002";
+        this.setStatus(`\u300C${suggestion.text}\u300D\u3092 \u3048\u3089\u3073\u307E\u3057\u305F\u3002`);
+      });
+      this.suggestionList.append(chip);
+    }
+  }
 };
-function selectBestRecognition(previewResult, accurateResult, kanaResult) {
+function selectBestRecognition(previewResult, accurateResult, kanaResult, handwrittenResult) {
   const candidates = [
     {
-      label: LIVE_PREVIEW_MANIFEST.modelLabel,
+      label: "preview",
       result: previewResult,
       score: scoreRecognition(previewResult, 0.01)
     }
   ];
   if (accurateResult) {
     candidates.push({
-      label: ACCURATE_RECOGNITION_MANIFEST.modelLabel,
+      label: "final",
       result: accurateResult,
       score: scoreRecognition(accurateResult, 0.05)
     });
     const hybridResult = buildHybridResult(previewResult, accurateResult);
     if (hybridResult) {
       candidates.push({
-        label: "\u8907\u5408\u7D50\u679C",
+        label: "hybrid",
         result: hybridResult,
         score: scoreRecognition(hybridResult, 0.035)
       });
@@ -1120,9 +1236,16 @@ function selectBestRecognition(previewResult, accurateResult, kanaResult) {
   }
   if (kanaResult) {
     candidates.push({
-      label: "Kana Template",
+      label: "kana",
       result: kanaResultToOcrResult(kanaResult),
       score: scoreKanaRecognition(kanaResult)
+    });
+  }
+  if (handwrittenResult) {
+    candidates.push({
+      label: "handwritten",
+      result: handwrittenResultToOcrResult(handwrittenResult),
+      score: scoreHandwrittenRecognition(handwrittenResult)
     });
   }
   return candidates.reduce((best, current) => current.score > best.score ? current : best);
@@ -1142,31 +1265,63 @@ function buildHybridResult(previewResult, accurateResult) {
     elapsedMs: Math.max(previewResult.elapsedMs, accurateResult.elapsedMs)
   };
 }
-function buildFinalMeta(selection, previewResult, accurateResult, kanaResult) {
-  const parts = [
-    `\u63A1\u7528 ${selection.label}`,
-    `\u884C\u6570 ${selection.result.lines.length}`,
-    `\u5E73\u5747\u4FE1\u983C\u5EA6 ${(selection.result.averageConfidence * 100).toFixed(1)}%`,
-    `\u8EFD\u91CF ${(previewResult.averageConfidence * 100).toFixed(1)}%`
-  ];
+function buildRecognitionSuggestions(previewResult, accurateResult, kanaResult, handwrittenResult, selection) {
+  const suggestions = /* @__PURE__ */ new Map();
+  const push = (text, score, source) => {
+    const normalized = normalizeForScoring(text);
+    if (!normalized || normalized === normalizeForScoring(selection.result.text)) {
+      return;
+    }
+    const existing = suggestions.get(normalized);
+    if (!existing || score > existing.score) {
+      suggestions.set(normalized, { text: normalized, score, source });
+    }
+  };
+  push(previewResult.text, scoreRecognition(previewResult, 0), "preview");
   if (accurateResult) {
-    parts.push(`\u9AD8\u7CBE\u5EA6 ${(accurateResult.averageConfidence * 100).toFixed(1)}%`);
+    push(accurateResult.text, scoreRecognition(accurateResult, 0), "final");
+    const hybridResult = buildHybridResult(previewResult, accurateResult);
+    if (hybridResult) {
+      push(hybridResult.text, scoreRecognition(hybridResult, 0), "hybrid");
+    }
   }
   if (kanaResult) {
-    parts.push(`\u304B\u306A ${(kanaResult.score * 100).toFixed(1)}%`);
+    for (const suggestion of kanaResult.suggestions) {
+      push(suggestion.text, scoreKanaRecognition({ ...kanaResult, text: suggestion.text, score: suggestion.score }), "kana");
+    }
   }
-  if (accurateResult) {
-    parts.push(`${Math.max(previewResult.elapsedMs, accurateResult.elapsedMs).toFixed(0)}ms`);
-  } else {
-    parts.push(`${previewResult.elapsedMs.toFixed(0)}ms`);
+  if (handwrittenResult) {
+    for (const suggestion of handwrittenResult.suggestions) {
+      push(suggestion.text, scoreHandwrittenSuggestion(suggestion.text, suggestion.score), "handwritten");
+    }
   }
-  return parts.join(" / ");
+  return [...suggestions.values()].sort((left, right) => right.score - left.score);
 }
 function kanaResultToOcrResult(result) {
   return {
     text: result.text,
     averageConfidence: result.score,
     elapsedMs: 0,
+    lines: [
+      {
+        text: result.text,
+        confidence: result.score,
+        boundingBox: { x: 0, y: 0, width: 0, height: 0 }
+      }
+    ]
+  };
+}
+function buildFinalMessage(text, suggestionCount) {
+  if (!text || text === "\u3088\u304F \u308F\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002") {
+    return "\u3088\u304F \u308F\u304B\u3089\u306A\u304B\u3063\u305F\u305F\u3081\u3001\u3082\u3046\u4E00\u5EA6 \u304A\u305F\u3081\u3057\u304F\u3060\u3055\u3044\u3002";
+  }
+  return suggestionCount > 0 ? "\u3044\u3061\u3070\u3093\u8FD1\u3044\u5019\u88DC\u3067\u3059\u3002\u4E0B\u306E\u300C\u3082\u3057\u304B\u3057\u3066\u300D\u3082 \u3048\u3089\u3079\u307E\u3059\u3002" : "\u3044\u3061\u3070\u3093\u8FD1\u3044\u5019\u88DC\u3067\u3059\u3002";
+}
+function handwrittenResultToOcrResult(result) {
+  return {
+    text: result.text,
+    averageConfidence: result.score,
+    elapsedMs: result.elapsedMs,
     lines: [
       {
         text: result.text,
@@ -1184,7 +1339,7 @@ function scoreRecognition(result, bias) {
   const characters = [...text];
   const allowedCount = characters.filter((character) => isAllowedJapaneseCharacter(character)).length;
   const allowedRatio = allowedCount / characters.length;
-  const confidence = clamp(result.averageConfidence, 0, 1);
+  const confidence = clamp2(result.averageConfidence, 0, 1);
   const length = characters.length;
   const lengthScore = length <= 4 ? 1 : length <= 10 ? 0.9 : 0.45;
   const singleLineBonus = result.lines.length <= 1 ? 0.04 : 0;
@@ -1199,6 +1354,19 @@ function scoreKanaRecognition(result) {
   const lengthScore = length <= 4 ? 1 : 0.78;
   return result.score * 0.82 + lengthScore * 0.18 + 0.08;
 }
+function scoreHandwrittenRecognition(result) {
+  return scoreHandwrittenSuggestion(result.text, result.score) + (result.characterCount <= 4 ? 0.1 : 0.04);
+}
+function scoreHandwrittenSuggestion(text, score) {
+  const normalized = normalizeForScoring(text);
+  if (!normalized) {
+    return -1;
+  }
+  const characters = [...normalized];
+  const allowedRatio = characters.filter((character) => isAllowedJapaneseCharacter(character)).length / characters.length;
+  const lengthScore = characters.length <= 4 ? 1 : characters.length <= 10 ? 0.88 : 0.4;
+  return clamp2(score, 0, 1) * 0.72 + allowedRatio * 0.18 + lengthScore * 0.1;
+}
 function scoreLine(line) {
   const text = normalizeForScoring(line.text);
   if (!text) {
@@ -1208,7 +1376,7 @@ function scoreLine(line) {
   const allowedRatio = characters.filter((character) => isAllowedJapaneseCharacter(character)).length / characters.length;
   const length = characters.length;
   const lengthScore = length <= 4 ? 1 : length <= 10 ? 0.9 : 0.45;
-  return clamp(line.confidence, 0, 1) * 0.62 + allowedRatio * 0.24 + lengthScore * 0.14;
+  return clamp2(line.confidence, 0, 1) * 0.62 + allowedRatio * 0.24 + lengthScore * 0.14;
 }
 function normalizeForScoring(text) {
   return text.replace(/\s+/gu, "");
@@ -1216,7 +1384,7 @@ function normalizeForScoring(text) {
 function isAllowedJapaneseCharacter(character) {
   return /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}々〆〇ヶヵー]/u.test(character);
 }
-function clamp(value, min, max) {
+function clamp2(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 function heading(className, text) {
@@ -1225,15 +1393,15 @@ function heading(className, text) {
   element.textContent = text;
   return element;
 }
-function paragraph(className, text) {
+function label(className, text) {
   const element = document.createElement("p");
   element.className = className;
   element.textContent = text;
   return element;
 }
-function chip(text) {
-  const element = document.createElement("span");
-  element.className = "eyebrow";
+function paragraph(className, text) {
+  const element = document.createElement("p");
+  element.className = className;
   element.textContent = text;
   return element;
 }
@@ -1250,36 +1418,37 @@ function div(className, ...children) {
   }
   return element;
 }
-function panelHeader(title, subtitle) {
-  const header = div("panel-header");
-  const copy = document.createElement("div");
+function stepCard(number, title, text) {
+  const card = div("step-card");
+  const badge = document.createElement("span");
+  badge.className = "step-number";
+  badge.textContent = number;
+  const titleElement = document.createElement("h2");
+  titleElement.className = "step-title";
+  titleElement.textContent = title;
+  const textElement = paragraph("step-text", text);
+  card.append(badge, titleElement, textElement);
+  return card;
+}
+function panelHeading(title, subtitle) {
+  const header = div("panel-heading");
   const titleElement = document.createElement("h2");
   titleElement.className = "panel-title";
   titleElement.textContent = title;
   const subtitleElement = paragraph("panel-subtitle", subtitle);
-  copy.append(titleElement, subtitleElement);
-  header.append(copy);
+  header.append(titleElement, subtitleElement);
   return header;
-}
-function hintRow(items) {
-  const row = div("hint-row");
-  for (const item of items) {
-    const span = document.createElement("span");
-    span.textContent = item;
-    row.append(span);
-  }
-  return row;
 }
 function actionsRow(...buttons) {
   const actions = div("actions");
   actions.append(...buttons);
   return actions;
 }
-function createButton(label, className) {
+function createButton(labelText, className) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
-  button.textContent = label;
+  button.textContent = labelText;
   return button;
 }
 

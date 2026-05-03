@@ -21,6 +21,11 @@ async function copyStaticAssets() {
     path.join(distDir, 'assets', 'ocr', 'mobile'),
     { recursive: true }
   );
+  await cp(
+    path.join(projectRoot, 'build', 'ocr', 'kanjidnn-ja-handwritten'),
+    path.join(distDir, 'assets', 'handwritten', 'kanjidnn'),
+    { recursive: true }
+  );
   const ortDistDir = path.join(projectRoot, 'node_modules', 'onnxruntime-web', 'dist');
   const ortTargetDir = path.join(distDir, 'vendor', 'onnxruntime');
   await mkdir(ortTargetDir, { recursive: true });
@@ -39,6 +44,7 @@ await esbuild.build({
   entryPoints: [
     path.join(srcDir, 'index.ts'),
     path.join(srcDir, 'workers', 'ocr.worker.ts'),
+    path.join(srcDir, 'workers', 'handwritten-classifier.worker.ts'),
   ],
   bundle: true,
   format: 'esm',
