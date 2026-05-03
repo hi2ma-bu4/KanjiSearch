@@ -1,4 +1,4 @@
-import * as ort from 'onnxruntime-web';
+import * as ort from 'onnxruntime-web/wasm';
 
 import type { AppModelManifest, OcrLineResult, OcrResult } from '../app/types';
 
@@ -24,7 +24,10 @@ class PpocrRecognizer {
   async initialize(manifest: AppModelManifest, modelBuffer: ArrayBuffer, dictionary: string[]): Promise<void> {
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.proxy = false;
-    ort.env.wasm.wasmPaths = manifest.wasmPrefixUrl;
+    ort.env.wasm.wasmPaths = {
+      mjs: manifest.wasmModuleUrl,
+      wasm: manifest.wasmBinaryUrl,
+    };
     this.dictionary = dictionary;
     this.session = await ort.InferenceSession.create(modelBuffer, {
       executionProviders: ['wasm'],

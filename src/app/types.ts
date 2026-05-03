@@ -42,6 +42,7 @@ export interface OcrResult {
 export interface AppModelManifest {
   modelUrl: string;
   dictionaryUrl: string;
-  wasmPrefixUrl: string;
+  wasmBinaryUrl: string;
+  wasmModuleUrl: string;
   cacheVersion: string;
 }

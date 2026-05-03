@@ -11,7 +11,8 @@ declare const __BUILD_TIME__: string;
 const OCR_MANIFEST: AppModelManifest = {
   modelUrl: new URL('./assets/ocr/rec.onnx', import.meta.url).toString(),
   dictionaryUrl: new URL('./assets/ocr/dict.txt', import.meta.url).toString(),
-  wasmPrefixUrl: new URL('./vendor/onnxruntime/', import.meta.url).toString(),
+  wasmBinaryUrl: new URL('./vendor/onnxruntime/ort-wasm-simd-threaded.wasm', import.meta.url).toString(),
+  wasmModuleUrl: new URL('./vendor/onnxruntime/ort-wasm-simd-threaded.mjs', import.meta.url).toString(),
   cacheVersion: 'ppocrv5-ch-ja-v1',
 };
 

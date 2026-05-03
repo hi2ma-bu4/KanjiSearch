@@ -387,7 +387,8 @@ var OcrWorkerClient = class {
 var OCR_MANIFEST = {
   modelUrl: new URL("./assets/ocr/rec.onnx", import.meta.url).toString(),
   dictionaryUrl: new URL("./assets/ocr/dict.txt", import.meta.url).toString(),
-  wasmPrefixUrl: new URL("./vendor/onnxruntime/", import.meta.url).toString(),
+  wasmBinaryUrl: new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString(),
+  wasmModuleUrl: new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.mjs", import.meta.url).toString(),
   cacheVersion: "ppocrv5-ch-ja-v1"
 };
 var HandwriteSearchApp = class {
@@ -450,7 +451,7 @@ var HandwriteSearchApp = class {
     this.modelBadge.className = "status-pill";
     this.modelBadge.textContent = "\u30E2\u30C7\u30EB: PP-OCRv5 Chinese/Japanese (Apache-2.0)";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-02T14:51:17.141Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T02:32:02.819Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }

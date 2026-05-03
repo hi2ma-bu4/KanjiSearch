@@ -20,7 +20,7 @@ async function copyStaticAssets() {
   const ortTargetDir = path.join(distDir, 'vendor', 'onnxruntime');
   await mkdir(ortTargetDir, { recursive: true });
   for (const fileName of await readdir(ortDistDir)) {
-    if (!fileName.endsWith('.wasm')) {
+    if (!fileName.startsWith('ort-wasm') || (!fileName.endsWith('.wasm') && !fileName.endsWith('.mjs'))) {
       continue;
     }
     await cp(path.join(ortDistDir, fileName), path.join(ortTargetDir, fileName));
