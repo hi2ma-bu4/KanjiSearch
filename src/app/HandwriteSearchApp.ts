@@ -2,6 +2,7 @@ import '../styles/app.css';
 
 import { AppDatabase } from './AppDatabase';
 import { HandwritingCanvas } from './HandwritingCanvas';
+import { KanaTemplateRecognizer, type KanaRecognitionResult } from './KanaTemplateRecognizer';
 import { ModelAssetService } from './ModelAssetService';
 import { OcrWorkerClient } from './OcrWorkerClient';
 import type { AppModelManifest, DrawSessionRecord, OcrLineResult, OcrResult } from './types';
@@ -43,6 +44,7 @@ export class HandwriteSearchApp {
   private readonly database = new AppDatabase();
   private readonly previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
   private readonly accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
+  private readonly kanaRecognizer = new KanaTemplateRecognizer();
   private readonly previewWorker = new OcrWorkerClient();
   private readonly accurateWorker = new OcrWorkerClient();
   private readonly root = document.createElement('main');
@@ -267,6 +269,7 @@ export class HandwriteSearchApp {
       await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
       this.previewReady = true;
       this.previewMeta.textContent = '描画に応じて軽量モデルの候補を自動更新します。';
+      this.kanaRecognizer.initialize();
       this.setStatus('軽量プレビュー準備完了。高精度モデルをバックグラウンドで読み込んでいます…');
       void this.prepareAccurateRecognizer().catch(() => undefined);
     } catch (error) {
@@ -349,11 +352,17 @@ export class HandwriteSearchApp {
     this.previewRunning = true;
     try {
       const result = await this.previewWorker.recognize(this.canvasController.exportImageData());
+      const kanaResult = this.kanaRecognizer.recognize(this.canvasController.exportImageData());
       if (generation !== this.previewGeneration) {
         return;
       }
-      this.previewText.textContent = result.text || 'まだ候補が見つかりません。';
-      this.previewMeta.textContent = `軽量モデル / 行数 ${result.lines.length} / 平均信頼度 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
+      if (kanaResult) {
+        this.previewText.textContent = kanaResult.text;
+        this.previewMeta.textContent = `かなテンプレート / ${kanaResult.characterCount}文字 / スコア ${(kanaResult.score * 100).toFixed(1)}%`;
+      } else {
+        this.previewText.textContent = result.text || 'まだ候補が見つかりません。';
+        this.previewMeta.textContent = `軽量モデル / 行数 ${result.lines.length} / 平均信頼度 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
+      }
     } catch (error) {
       console.error(error);
       if (generation === this.previewGeneration) {
@@ -381,6 +390,7 @@ export class HandwriteSearchApp {
     try {
       const imageData = this.canvasController.exportImageData();
       const previewPromise = this.previewWorker.recognize(imageData);
+      const kanaResult = this.kanaRecognizer.recognize(imageData);
       const accuratePromise = this.prepareAccurateRecognizer()
         .then(() => this.accurateWorker.recognize(imageData))
         .catch(error => {
@@ -389,13 +399,18 @@ export class HandwriteSearchApp {
         });
 
       const [previewResult, accurateResult] = await Promise.all([previewPromise, accuratePromise]);
-      const selection = selectBestRecognition(previewResult, accurateResult);
+      const selection = selectBestRecognition(previewResult, accurateResult, kanaResult);
 
       this.currentResult = selection.result;
-      this.previewText.textContent = previewResult.text || 'まだ候補が見つかりません。';
-      this.previewMeta.textContent = `軽量モデル / 行数 ${previewResult.lines.length} / 平均信頼度 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
+      if (kanaResult) {
+        this.previewText.textContent = kanaResult.text;
+        this.previewMeta.textContent = `かなテンプレート / ${kanaResult.characterCount}文字 / スコア ${(kanaResult.score * 100).toFixed(1)}%`;
+      } else {
+        this.previewText.textContent = previewResult.text || 'まだ候補が見つかりません。';
+        this.previewMeta.textContent = `軽量モデル / 行数 ${previewResult.lines.length} / 平均信頼度 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
+      }
       this.resultText.textContent = selection.result.text || '文字が見つかりませんでした。';
-      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult);
+      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult, kanaResult);
       const statusMessage =
         accurateResult
           ? `認識が完了しました。採用: ${selection.label}`
@@ -504,7 +519,11 @@ export class HandwriteSearchApp {
   }
 }
 
-function selectBestRecognition(previewResult: OcrResult, accurateResult: OcrResult | null): RecognitionSelection {
+function selectBestRecognition(
+  previewResult: OcrResult,
+  accurateResult: OcrResult | null,
+  kanaResult: KanaRecognitionResult | null
+): RecognitionSelection {
   const candidates: RecognitionSelection[] = [
     {
       label: LIVE_PREVIEW_MANIFEST.modelLabel,
@@ -528,6 +547,14 @@ function selectBestRecognition(previewResult: OcrResult, accurateResult: OcrResu
         score: scoreRecognition(hybridResult, 0.035),
       });
     }
+  }
+
+  if (kanaResult) {
+    candidates.push({
+      label: 'Kana Template',
+      result: kanaResultToOcrResult(kanaResult),
+      score: scoreKanaRecognition(kanaResult),
+    });
   }
 
   return candidates.reduce((best, current) => (current.score > best.score ? current : best));
@@ -555,7 +582,8 @@ function buildHybridResult(previewResult: OcrResult, accurateResult: OcrResult):
 function buildFinalMeta(
   selection: RecognitionSelection,
   previewResult: OcrResult,
-  accurateResult: OcrResult | null
+  accurateResult: OcrResult | null,
+  kanaResult: KanaRecognitionResult | null
 ): string {
   const parts = [
     `採用 ${selection.label}`,
@@ -566,12 +594,34 @@ function buildFinalMeta(
 
   if (accurateResult) {
     parts.push(`高精度 ${(accurateResult.averageConfidence * 100).toFixed(1)}%`);
+  }
+
+  if (kanaResult) {
+    parts.push(`かな ${(kanaResult.score * 100).toFixed(1)}%`);
+  }
+
+  if (accurateResult) {
     parts.push(`${Math.max(previewResult.elapsedMs, accurateResult.elapsedMs).toFixed(0)}ms`);
   } else {
     parts.push(`${previewResult.elapsedMs.toFixed(0)}ms`);
   }
 
   return parts.join(' / ');
+}
+
+function kanaResultToOcrResult(result: KanaRecognitionResult): OcrResult {
+  return {
+    text: result.text,
+    averageConfidence: result.score,
+    elapsedMs: 0,
+    lines: [
+      {
+        text: result.text,
+        confidence: result.score,
+        boundingBox: { x: 0, y: 0, width: 0, height: 0 },
+      },
+    ],
+  };
 }
 
 function scoreRecognition(result: OcrResult, bias: number): number {
@@ -589,6 +639,17 @@ function scoreRecognition(result: OcrResult, bias: number): number {
   const singleLineBonus = result.lines.length <= 1 ? 0.04 : 0;
 
   return confidence * 0.58 + allowedRatio * 0.25 + lengthScore * 0.14 + singleLineBonus + bias;
+}
+
+function scoreKanaRecognition(result: KanaRecognitionResult): number {
+  const text = normalizeForScoring(result.text);
+  if (!text || !/^[\p{Script=Hiragana}\p{Script=Katakana}ーゝゞヽヾ]+$/u.test(text)) {
+    return -1;
+  }
+
+  const length = [...text].length;
+  const lengthScore = length <= 4 ? 1 : 0.78;
+  return result.score * 0.82 + lengthScore * 0.18 + 0.08;
 }
 
 function scoreLine(line: OcrLineResult): number {

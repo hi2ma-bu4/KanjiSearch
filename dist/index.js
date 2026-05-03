@@ -251,6 +251,273 @@ async function loadImage(dataUrl) {
   return image;
 }
 
+// src/app/KanaTemplateRecognizer.ts
+var HIRAGANA = "\u3041\u3042\u3043\u3044\u3045\u3046\u3047\u3048\u3049\u304A\u304B\u304C\u304D\u304E\u304F\u3050\u3051\u3052\u3053\u3054\u3055\u3056\u3057\u3058\u3059\u305A\u305B\u305C\u305D\u305E\u305F\u3060\u3061\u3062\u3063\u3064\u3065\u3066\u3067\u3068\u3069\u306A\u306B\u306C\u306D\u306E\u306F\u3070\u3071\u3072\u3073\u3074\u3075\u3076\u3077\u3078\u3079\u307A\u307B\u307C\u307D\u307E\u307F\u3080\u3081\u3082\u3083\u3084\u3085\u3086\u3087\u3088\u3089\u308A\u308B\u308C\u308D\u308E\u308F\u3090\u3091\u3092\u3093\u3094\u3095\u3096\u309D\u309E";
+var KATAKANA = "\u30A1\u30A2\u30A3\u30A4\u30A5\u30A6\u30A7\u30A8\u30A9\u30AA\u30AB\u30AC\u30AD\u30AE\u30AF\u30B0\u30B1\u30B2\u30B3\u30B4\u30B5\u30B6\u30B7\u30B8\u30B9\u30BA\u30BB\u30BC\u30BD\u30BE\u30BF\u30C0\u30C1\u30C2\u30C3\u30C4\u30C5\u30C6\u30C7\u30C8\u30C9\u30CA\u30CB\u30CC\u30CD\u30CE\u30CF\u30D0\u30D1\u30D2\u30D3\u30D4\u30D5\u30D6\u30D7\u30D8\u30D9\u30DA\u30DB\u30DC\u30DD\u30DE\u30DF\u30E0\u30E1\u30E2\u30E3\u30E4\u30E5\u30E6\u30E7\u30E8\u30E9\u30EA\u30EB\u30EC\u30ED\u30EE\u30EF\u30F0\u30F1\u30F2\u30F3\u30F4\u30F5\u30F6\u30FD\u30FE\u30FC";
+var KANA_CHARACTERS = Array.from(/* @__PURE__ */ new Set([...HIRAGANA, ...KATAKANA]));
+var TEMPLATE_SIZE = 32;
+var DRAW_SIZE = 28;
+var FONT_SIZE = 52;
+var FONT_STACKS = [
+  '"BIZ UDPGothic", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif',
+  '"Hiragino Sans", "Noto Sans JP", sans-serif',
+  '"Hiragino Mincho ProN", "Yu Mincho", serif'
+];
+var KanaTemplateRecognizer = class {
+  templates = [];
+  initialized = false;
+  initialize() {
+    if (this.initialized) {
+      return;
+    }
+    this.templates = [];
+    for (const char of KANA_CHARACTERS) {
+      for (const fontStack of FONT_STACKS) {
+        const bitmap = renderCharacterTemplate(char, fontStack);
+        this.templates.push({
+          char,
+          bitmap,
+          rowProfile: buildRowProfile(bitmap),
+          colProfile: buildColProfile(bitmap)
+        });
+      }
+    }
+    this.initialized = true;
+  }
+  recognize(imageData) {
+    this.initialize();
+    const mask = createInkMask(imageData);
+    const components = extractInkComponents(mask, imageData.width, imageData.height).filter((component) => component.pixels >= 24);
+    if (components.length === 0) {
+      return null;
+    }
+    const groups = groupComponentsIntoCharacters(components);
+    if (groups.length === 0 || groups.length > 4) {
+      return null;
+    }
+    const characters = [];
+    const scores = [];
+    for (const group of groups) {
+      const bitmap = normalizeMaskToTemplate(mask, imageData.width, imageData.height, group);
+      const rowProfile = buildRowProfile(bitmap);
+      const colProfile = buildColProfile(bitmap);
+      const best = findBestTemplateMatch(bitmap, rowProfile, colProfile, this.templates);
+      if (!best || best.score < 0.42) {
+        return null;
+      }
+      characters.push(best.char);
+      scores.push(best.score);
+    }
+    return {
+      text: characters.join(""),
+      score: scores.reduce((sum, value) => sum + value, 0) / scores.length,
+      characterCount: characters.length
+    };
+  }
+};
+function renderCharacterTemplate(char, fontStack) {
+  const canvas = new OffscreenCanvas(TEMPLATE_SIZE, TEMPLATE_SIZE);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("OffscreenCanvas 2D context is not available.");
+  }
+  ctx.clearRect(0, 0, TEMPLATE_SIZE, TEMPLATE_SIZE);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, TEMPLATE_SIZE, TEMPLATE_SIZE);
+  ctx.fillStyle = "#000000";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `${FONT_SIZE}px ${fontStack}`;
+  ctx.fillText(char, TEMPLATE_SIZE / 2, TEMPLATE_SIZE / 2 + 1);
+  const imageData = ctx.getImageData(0, 0, TEMPLATE_SIZE, TEMPLATE_SIZE);
+  const mask = createInkMask(imageData);
+  const components = extractInkComponents(mask, TEMPLATE_SIZE, TEMPLATE_SIZE);
+  const bounds = mergeComponents(components);
+  return bounds ? normalizeMaskToTemplate(mask, TEMPLATE_SIZE, TEMPLATE_SIZE, bounds) : new Uint8Array(TEMPLATE_SIZE * TEMPLATE_SIZE);
+}
+function findBestTemplateMatch(bitmap, rowProfile, colProfile, templates) {
+  let bestChar = "";
+  let bestScore = -1;
+  for (const template of templates) {
+    const iou = bitmapIoU(bitmap, template.bitmap);
+    const rowDistance = profileDistance(rowProfile, template.rowProfile);
+    const colDistance = profileDistance(colProfile, template.colProfile);
+    const score = iou * 0.72 + (1 - rowDistance) * 0.14 + (1 - colDistance) * 0.14;
+    if (score > bestScore) {
+      bestScore = score;
+      bestChar = template.char;
+    }
+  }
+  return bestChar ? { char: bestChar, score: bestScore } : null;
+}
+function groupComponentsIntoCharacters(components) {
+  const sorted = [...components].sort((left, right) => left.left - right.left || left.top - right.top);
+  const groups = [];
+  for (const component of sorted) {
+    const last = groups.at(-1);
+    if (!last) {
+      groups.push({ ...component });
+      continue;
+    }
+    const horizontalGap = component.left - last.right;
+    const verticalOverlap = Math.max(0, Math.min(last.bottom, component.bottom) - Math.max(last.top, component.top) + 1);
+    const minHeight = Math.min(last.bottom - last.top + 1, component.bottom - component.top + 1);
+    const mergeGap = Math.max(10, Math.round(minHeight * 0.45));
+    if (horizontalGap <= mergeGap || verticalOverlap >= Math.max(8, Math.round(minHeight * 0.3))) {
+      last.left = Math.min(last.left, component.left);
+      last.top = Math.min(last.top, component.top);
+      last.right = Math.max(last.right, component.right);
+      last.bottom = Math.max(last.bottom, component.bottom);
+      continue;
+    }
+    groups.push({ ...component });
+  }
+  return groups;
+}
+function normalizeMaskToTemplate(mask, width, height, bounds) {
+  const target = new Uint8Array(TEMPLATE_SIZE * TEMPLATE_SIZE);
+  const cropWidth = bounds.right - bounds.left + 1;
+  const cropHeight = bounds.bottom - bounds.top + 1;
+  const scale = DRAW_SIZE / Math.max(cropWidth, cropHeight);
+  const scaledWidth = Math.max(1, Math.round(cropWidth * scale));
+  const scaledHeight = Math.max(1, Math.round(cropHeight * scale));
+  const offsetX = Math.floor((TEMPLATE_SIZE - scaledWidth) / 2);
+  const offsetY = Math.floor((TEMPLATE_SIZE - scaledHeight) / 2);
+  for (let targetY = 0; targetY < scaledHeight; targetY += 1) {
+    const sourceY = bounds.top + Math.min(cropHeight - 1, Math.floor(targetY / scale));
+    for (let targetX = 0; targetX < scaledWidth; targetX += 1) {
+      const sourceX = bounds.left + Math.min(cropWidth - 1, Math.floor(targetX / scale));
+      if (mask[sourceY * width + sourceX] > 0) {
+        target[(offsetY + targetY) * TEMPLATE_SIZE + offsetX + targetX] = 1;
+      }
+    }
+  }
+  return target;
+}
+function createInkMask(imageData) {
+  const mask = new Uint8Array(imageData.width * imageData.height);
+  const { data } = imageData;
+  for (let index = 0; index < mask.length; index += 1) {
+    const offset = index * 4;
+    const grayscale = (data[offset] + data[offset + 1] + data[offset + 2]) / 3;
+    const ink = 255 - grayscale;
+    mask[index] = ink > 28 ? 1 : 0;
+  }
+  return mask;
+}
+function extractInkComponents(mask, width, height) {
+  const visited = new Uint8Array(mask.length);
+  const components = [];
+  const stack = new Int32Array(mask.length);
+  for (let start = 0; start < mask.length; start += 1) {
+    if (mask[start] === 0 || visited[start] === 1) {
+      continue;
+    }
+    let stackSize = 0;
+    stack[stackSize] = start;
+    stackSize += 1;
+    visited[start] = 1;
+    let left = width;
+    let right = -1;
+    let top = height;
+    let bottom = -1;
+    let pixels = 0;
+    while (stackSize > 0) {
+      stackSize -= 1;
+      const index = stack[stackSize];
+      const x = index % width;
+      const y = Math.floor(index / width);
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
+      pixels += 1;
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        const nextY = y + offsetY;
+        if (nextY < 0 || nextY >= height) {
+          continue;
+        }
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          if (offsetX === 0 && offsetY === 0) {
+            continue;
+          }
+          const nextX = x + offsetX;
+          if (nextX < 0 || nextX >= width) {
+            continue;
+          }
+          const nextIndex = nextY * width + nextX;
+          if (mask[nextIndex] === 0 || visited[nextIndex] === 1) {
+            continue;
+          }
+          visited[nextIndex] = 1;
+          stack[stackSize] = nextIndex;
+          stackSize += 1;
+        }
+      }
+    }
+    components.push({ left, top, right, bottom, pixels });
+  }
+  return components;
+}
+function mergeComponents(components) {
+  if (components.length === 0) {
+    return null;
+  }
+  return components.reduce(
+    (bounds, component) => ({
+      left: Math.min(bounds.left, component.left),
+      top: Math.min(bounds.top, component.top),
+      right: Math.max(bounds.right, component.right),
+      bottom: Math.max(bounds.bottom, component.bottom)
+    }),
+    { ...components[0] }
+  );
+}
+function buildRowProfile(bitmap) {
+  const profile = new Float32Array(TEMPLATE_SIZE);
+  for (let y = 0; y < TEMPLATE_SIZE; y += 1) {
+    let count = 0;
+    for (let x = 0; x < TEMPLATE_SIZE; x += 1) {
+      count += bitmap[y * TEMPLATE_SIZE + x];
+    }
+    profile[y] = count / TEMPLATE_SIZE;
+  }
+  return profile;
+}
+function buildColProfile(bitmap) {
+  const profile = new Float32Array(TEMPLATE_SIZE);
+  for (let x = 0; x < TEMPLATE_SIZE; x += 1) {
+    let count = 0;
+    for (let y = 0; y < TEMPLATE_SIZE; y += 1) {
+      count += bitmap[y * TEMPLATE_SIZE + x];
+    }
+    profile[x] = count / TEMPLATE_SIZE;
+  }
+  return profile;
+}
+function bitmapIoU(left, right) {
+  let intersection = 0;
+  let union = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const hasLeft = left[index] === 1;
+    const hasRight = right[index] === 1;
+    if (hasLeft && hasRight) {
+      intersection += 1;
+    }
+    if (hasLeft || hasRight) {
+      union += 1;
+    }
+  }
+  return union === 0 ? 0 : intersection / union;
+}
+function profileDistance(left, right) {
+  let total = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    total += Math.abs(left[index] - right[index]);
+  }
+  return total / left.length;
+}
+
 // src/app/ModelAssetService.ts
 var ModelAssetService = class {
   constructor(database, manifest) {
@@ -415,6 +682,7 @@ var HandwriteSearchApp = class {
   database = new AppDatabase();
   previewAssets = new ModelAssetService(this.database, LIVE_PREVIEW_MANIFEST);
   accurateAssets = new ModelAssetService(this.database, ACCURATE_RECOGNITION_MANIFEST);
+  kanaRecognizer = new KanaTemplateRecognizer();
   previewWorker = new OcrWorkerClient();
   accurateWorker = new OcrWorkerClient();
   root = document.createElement("main");
@@ -479,7 +747,7 @@ var HandwriteSearchApp = class {
     this.modelBadge.className = "status-pill";
     this.modelBadge.textContent = "\u30E2\u30C7\u30EB: \u8EFD\u91CF PP-OCRv5 Mobile / \u9AD8\u7CBE\u5EA6 PP-OCRv5 Server";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T04:13:36.663Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T06:14:55.107Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }
@@ -613,6 +881,7 @@ var HandwriteSearchApp = class {
       await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
       this.previewReady = true;
       this.previewMeta.textContent = "\u63CF\u753B\u306B\u5FDC\u3058\u3066\u8EFD\u91CF\u30E2\u30C7\u30EB\u306E\u5019\u88DC\u3092\u81EA\u52D5\u66F4\u65B0\u3057\u307E\u3059\u3002";
+      this.kanaRecognizer.initialize();
       this.setStatus("\u8EFD\u91CF\u30D7\u30EC\u30D3\u30E5\u30FC\u6E96\u5099\u5B8C\u4E86\u3002\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u3092\u30D0\u30C3\u30AF\u30B0\u30E9\u30A6\u30F3\u30C9\u3067\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u2026");
       void this.prepareAccurateRecognizer().catch(() => void 0);
     } catch (error) {
@@ -682,11 +951,17 @@ var HandwriteSearchApp = class {
     this.previewRunning = true;
     try {
       const result = await this.previewWorker.recognize(this.canvasController.exportImageData());
+      const kanaResult = this.kanaRecognizer.recognize(this.canvasController.exportImageData());
       if (generation !== this.previewGeneration) {
         return;
       }
-      this.previewText.textContent = result.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
-      this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${result.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
+      if (kanaResult) {
+        this.previewText.textContent = kanaResult.text;
+        this.previewMeta.textContent = `\u304B\u306A\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8 / ${kanaResult.characterCount}\u6587\u5B57 / \u30B9\u30B3\u30A2 ${(kanaResult.score * 100).toFixed(1)}%`;
+      } else {
+        this.previewText.textContent = result.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
+        this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${result.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(result.averageConfidence * 100).toFixed(1)}% / ${result.elapsedMs.toFixed(0)}ms`;
+      }
     } catch (error) {
       console.error(error);
       if (generation === this.previewGeneration) {
@@ -712,17 +987,23 @@ var HandwriteSearchApp = class {
     try {
       const imageData = this.canvasController.exportImageData();
       const previewPromise = this.previewWorker.recognize(imageData);
+      const kanaResult = this.kanaRecognizer.recognize(imageData);
       const accuratePromise = this.prepareAccurateRecognizer().then(() => this.accurateWorker.recognize(imageData)).catch((error) => {
         console.error(error);
         return null;
       });
       const [previewResult, accurateResult] = await Promise.all([previewPromise, accuratePromise]);
-      const selection = selectBestRecognition(previewResult, accurateResult);
+      const selection = selectBestRecognition(previewResult, accurateResult, kanaResult);
       this.currentResult = selection.result;
-      this.previewText.textContent = previewResult.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
-      this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${previewResult.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
+      if (kanaResult) {
+        this.previewText.textContent = kanaResult.text;
+        this.previewMeta.textContent = `\u304B\u306A\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8 / ${kanaResult.characterCount}\u6587\u5B57 / \u30B9\u30B3\u30A2 ${(kanaResult.score * 100).toFixed(1)}%`;
+      } else {
+        this.previewText.textContent = previewResult.text || "\u307E\u3060\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002";
+        this.previewMeta.textContent = `\u8EFD\u91CF\u30E2\u30C7\u30EB / \u884C\u6570 ${previewResult.lines.length} / \u5E73\u5747\u4FE1\u983C\u5EA6 ${(previewResult.averageConfidence * 100).toFixed(1)}% / ${previewResult.elapsedMs.toFixed(0)}ms`;
+      }
       this.resultText.textContent = selection.result.text || "\u6587\u5B57\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002";
-      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult);
+      this.resultMeta.textContent = buildFinalMeta(selection, previewResult, accurateResult, kanaResult);
       const statusMessage = accurateResult ? `\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002\u63A1\u7528: ${selection.label}` : "\u9AD8\u7CBE\u5EA6\u30E2\u30C7\u30EB\u306A\u3057\u3067\u8A8D\u8B58\u304C\u5B8C\u4E86\u3057\u307E\u3057\u305F\u3002";
       this.setStatus(statusMessage);
       await this.saveCurrentSnapshot();
@@ -814,7 +1095,7 @@ var HandwriteSearchApp = class {
     this.statusLabel.textContent = message;
   }
 };
-function selectBestRecognition(previewResult, accurateResult) {
+function selectBestRecognition(previewResult, accurateResult, kanaResult) {
   const candidates = [
     {
       label: LIVE_PREVIEW_MANIFEST.modelLabel,
@@ -837,6 +1118,13 @@ function selectBestRecognition(previewResult, accurateResult) {
       });
     }
   }
+  if (kanaResult) {
+    candidates.push({
+      label: "Kana Template",
+      result: kanaResultToOcrResult(kanaResult),
+      score: scoreKanaRecognition(kanaResult)
+    });
+  }
   return candidates.reduce((best, current) => current.score > best.score ? current : best);
 }
 function buildHybridResult(previewResult, accurateResult) {
@@ -854,7 +1142,7 @@ function buildHybridResult(previewResult, accurateResult) {
     elapsedMs: Math.max(previewResult.elapsedMs, accurateResult.elapsedMs)
   };
 }
-function buildFinalMeta(selection, previewResult, accurateResult) {
+function buildFinalMeta(selection, previewResult, accurateResult, kanaResult) {
   const parts = [
     `\u63A1\u7528 ${selection.label}`,
     `\u884C\u6570 ${selection.result.lines.length}`,
@@ -863,11 +1151,30 @@ function buildFinalMeta(selection, previewResult, accurateResult) {
   ];
   if (accurateResult) {
     parts.push(`\u9AD8\u7CBE\u5EA6 ${(accurateResult.averageConfidence * 100).toFixed(1)}%`);
+  }
+  if (kanaResult) {
+    parts.push(`\u304B\u306A ${(kanaResult.score * 100).toFixed(1)}%`);
+  }
+  if (accurateResult) {
     parts.push(`${Math.max(previewResult.elapsedMs, accurateResult.elapsedMs).toFixed(0)}ms`);
   } else {
     parts.push(`${previewResult.elapsedMs.toFixed(0)}ms`);
   }
   return parts.join(" / ");
+}
+function kanaResultToOcrResult(result) {
+  return {
+    text: result.text,
+    averageConfidence: result.score,
+    elapsedMs: 0,
+    lines: [
+      {
+        text: result.text,
+        confidence: result.score,
+        boundingBox: { x: 0, y: 0, width: 0, height: 0 }
+      }
+    ]
+  };
 }
 function scoreRecognition(result, bias) {
   const text = normalizeForScoring(result.text);
@@ -882,6 +1189,15 @@ function scoreRecognition(result, bias) {
   const lengthScore = length <= 4 ? 1 : length <= 10 ? 0.9 : 0.45;
   const singleLineBonus = result.lines.length <= 1 ? 0.04 : 0;
   return confidence * 0.58 + allowedRatio * 0.25 + lengthScore * 0.14 + singleLineBonus + bias;
+}
+function scoreKanaRecognition(result) {
+  const text = normalizeForScoring(result.text);
+  if (!text || !/^[\p{Script=Hiragana}\p{Script=Katakana}ーゝゞヽヾ]+$/u.test(text)) {
+    return -1;
+  }
+  const length = [...text].length;
+  const lengthScore = length <= 4 ? 1 : 0.78;
+  return result.score * 0.82 + lengthScore * 0.18 + 0.08;
 }
 function scoreLine(line) {
   const text = normalizeForScoring(line.text);
