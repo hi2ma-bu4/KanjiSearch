@@ -475,7 +475,7 @@ var HandwriteSearchApp = class {
     this.modelBadge.className = "status-pill";
     this.modelBadge.textContent = "\u30E2\u30C7\u30EB: \u8EFD\u91CF PP-OCRv5 Mobile / \u9AD8\u7CBE\u5EA6 PP-OCRv5 Server";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T03:54:11.664Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T04:04:21.480Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }

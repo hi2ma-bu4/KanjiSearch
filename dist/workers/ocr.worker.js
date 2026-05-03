@@ -2739,72 +2739,56 @@ self.addEventListener("message", async (event) => {
   }
 });
 function segmentIntoLines(imageData) {
-  const grayscale = createInkMask(imageData);
-  const width = imageData.width;
-  const height = imageData.height;
-  const rowSums = new Uint32Array(height);
-  for (let y = 0; y < height; y += 1) {
-    let sum = 0;
-    for (let x = 0; x < width; x += 1) {
-      sum += grayscale[y * width + x];
-    }
-    rowSums[y] = sum;
-  }
-  const lines = [];
-  const rowThreshold = Math.max(40, width * 5);
-  const minBlankRows = 10;
-  let start = -1;
-  let blankRun = 0;
-  for (let y = 0; y < height; y += 1) {
-    const hasInk = rowSums[y] >= rowThreshold;
-    if (hasInk && start === -1) {
-      start = y;
-      blankRun = 0;
-    } else if (start !== -1 && !hasInk) {
-      blankRun += 1;
-      if (blankRun >= minBlankRows) {
-        lines.push({
-          top: Math.max(0, start - 10),
-          bottom: Math.min(height, y - blankRun + 10)
-        });
-        start = -1;
-        blankRun = 0;
-      }
-    } else if (hasInk) {
-      blankRun = 0;
-    }
-  }
-  if (start !== -1) {
-    lines.push({ top: Math.max(0, start - 10), bottom: height });
-  }
-  if (lines.length === 0) {
+  const mask = createInkMask(imageData);
+  const components = extractInkComponents(mask, imageData.width, imageData.height).filter((component) => component.pixels >= 24);
+  if (components.length === 0) {
     return [];
   }
-  return lines.map((line) => cropLineRegion(imageData, grayscale, line.top, line.bottom)).filter((line) => line !== null);
-}
-function cropLineRegion(source, mask, top, bottom) {
-  const width = source.width;
-  let left = width;
-  let right = -1;
-  for (let y = top; y < bottom; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      if (mask[y * width + x] > 0) {
-        left = Math.min(left, x);
-        right = Math.max(right, x);
-      }
+  components.sort((left, right) => left.top - right.top || left.left - right.left);
+  const lines = [];
+  for (const component of components) {
+    const lastLine = lines.at(-1);
+    if (!lastLine) {
+      lines.push({ ...component });
+      continue;
     }
+    if (shouldMergeIntoLine(lastLine, component)) {
+      lastLine.top = Math.min(lastLine.top, component.top);
+      lastLine.bottom = Math.max(lastLine.bottom, component.bottom);
+      lastLine.left = Math.min(lastLine.left, component.left);
+      lastLine.right = Math.max(lastLine.right, component.right);
+      continue;
+    }
+    lines.push({ ...component });
   }
-  if (right < left) {
+  const mergedLines = [];
+  for (const line of lines) {
+    const previousLine = mergedLines.at(-1);
+    if (previousLine && shouldMergeIntoLine(previousLine, line)) {
+      previousLine.top = Math.min(previousLine.top, line.top);
+      previousLine.bottom = Math.max(previousLine.bottom, line.bottom);
+      previousLine.left = Math.min(previousLine.left, line.left);
+      previousLine.right = Math.max(previousLine.right, line.right);
+      continue;
+    }
+    mergedLines.push({ ...line });
+  }
+  return mergedLines.map((line) => cropLineRegion(imageData, line.left, line.top, line.right, line.bottom)).filter((line) => line !== null);
+}
+function cropLineRegion(source, left, top, right, bottom) {
+  if (right < left || bottom < top) {
     return null;
   }
-  const paddedLeft = Math.max(0, left - 10);
-  const paddedRight = Math.min(width - 1, right + 10);
+  const paddedLeft = Math.max(0, left - 16);
+  const paddedTop = Math.max(0, top - 16);
+  const paddedRight = Math.min(source.width - 1, right + 16);
+  const paddedBottom = Math.min(source.height - 1, bottom + 16);
   const cropWidth = paddedRight - paddedLeft + 1;
-  const cropHeight = Math.max(1, bottom - top);
+  const cropHeight = paddedBottom - paddedTop + 1;
   const data = new Uint8ClampedArray(cropWidth * cropHeight * 4);
   for (let y = 0; y < cropHeight; y += 1) {
     for (let x = 0; x < cropWidth; x += 1) {
-      const sourceIndex = ((top + y) * width + (paddedLeft + x)) * 4;
+      const sourceIndex = ((paddedTop + y) * source.width + (paddedLeft + x)) * 4;
       const targetIndex = (y * cropWidth + x) * 4;
       data[targetIndex] = source.data[sourceIndex];
       data[targetIndex + 1] = source.data[sourceIndex + 1];
@@ -2816,11 +2800,77 @@ function cropLineRegion(source, mask, top, bottom) {
     imageData: new ImageData(data, cropWidth, cropHeight),
     boundingBox: {
       x: paddedLeft,
-      y: top,
+      y: paddedTop,
       width: cropWidth,
       height: cropHeight
     }
   };
+}
+function extractInkComponents(mask, width, height) {
+  const visited = new Uint8Array(mask.length);
+  const components = [];
+  const stack = new Int32Array(mask.length);
+  for (let start = 0; start < mask.length; start += 1) {
+    if (mask[start] === 0 || visited[start] === 1) {
+      continue;
+    }
+    let stackSize = 0;
+    stack[stackSize] = start;
+    stackSize += 1;
+    visited[start] = 1;
+    let left = width;
+    let right = -1;
+    let top = height;
+    let bottom = -1;
+    let pixels = 0;
+    while (stackSize > 0) {
+      stackSize -= 1;
+      const index = stack[stackSize];
+      const x = index % width;
+      const y = Math.floor(index / width);
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
+      pixels += 1;
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        const nextY = y + offsetY;
+        if (nextY < 0 || nextY >= height) {
+          continue;
+        }
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          if (offsetX === 0 && offsetY === 0) {
+            continue;
+          }
+          const nextX = x + offsetX;
+          if (nextX < 0 || nextX >= width) {
+            continue;
+          }
+          const nextIndex = nextY * width + nextX;
+          if (mask[nextIndex] === 0 || visited[nextIndex] === 1) {
+            continue;
+          }
+          visited[nextIndex] = 1;
+          stack[stackSize] = nextIndex;
+          stackSize += 1;
+        }
+      }
+    }
+    components.push({ left, top, right, bottom, pixels });
+  }
+  return components;
+}
+function shouldMergeIntoLine(line, component) {
+  const verticalGap = component.top - line.bottom;
+  const lineHeight = line.bottom - line.top + 1;
+  const componentHeight = component.bottom - component.top + 1;
+  const mergeGap = Math.max(24, Math.round(Math.min(lineHeight, componentHeight) * 0.9));
+  if (verticalGap > mergeGap) {
+    return false;
+  }
+  const horizontalOverlap = Math.max(0, Math.min(line.right, component.right) - Math.max(line.left, component.left) + 1);
+  const narrowestWidth = Math.min(line.right - line.left + 1, component.right - component.left + 1);
+  return horizontalOverlap >= Math.max(12, Math.round(narrowestWidth * 0.2)) || verticalGap <= 8;
 }
 function createInkMask(imageData) {
   const mask = new Uint8ClampedArray(imageData.width * imageData.height);
