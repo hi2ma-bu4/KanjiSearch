@@ -885,8 +885,8 @@ var HandwriteSearchApp = class {
   root = document.createElement("main");
   canvasElement = document.createElement("canvas");
   canvasController = new HandwritingCanvas(this.canvasElement);
-  recognizeButton = createButton("\u3088\u307F\u3068\u308B", "button button-primary");
-  clearButton = createButton("\u3051\u3059", "button button-secondary");
+  recognizeButton = createButton("\u8AAD\u307F\u53D6\u308A", "button button-primary");
+  clearButton = createButton("\u30AF\u30EA\u30A2", "button button-secondary");
   statusLabel = document.createElement("p");
   previewText = document.createElement("pre");
   previewMeta = document.createElement("p");
@@ -979,7 +979,7 @@ var HandwriteSearchApp = class {
     this.setStatus("\u8D77\u52D5\u4E2D...");
     this.setBusy(true);
     try {
-      const [modelBuffer, dictionary] = await Promise.all([this.previewAssets.getModelBuffer(() => this.setStatus("\u3088\u307F\u3068\u308A\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026")), this.previewAssets.getDictionary(() => this.setStatus("\u3053\u3068\u3070\u306E \u3058\u3085\u3093\u3073\u3092 \u3057\u3066\u3044\u307E\u3059\u2026"))]);
+      const [modelBuffer, dictionary] = await Promise.all([this.previewAssets.getModelBuffer(() => this.setStatus("\u691C\u51FA\u306E\u6E96\u5099\u3092\u3057\u3066\u3044\u307E\u3059...")), this.previewAssets.getDictionary(() => this.setStatus("\u8A00\u8449\u306E\u6E96\u5099\u3092\u3057\u3066\u3044\u307E\u3059\u2026"))]);
       await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
       this.previewReady = true;
       this.kanaRecognizer.initialize();

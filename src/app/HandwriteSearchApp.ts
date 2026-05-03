@@ -66,8 +66,8 @@ export class HandwriteSearchApp {
 	private readonly root = document.createElement("main");
 	private readonly canvasElement = document.createElement("canvas");
 	private readonly canvasController = new HandwritingCanvas(this.canvasElement);
-	private readonly recognizeButton = createButton("よみとる", "button button-primary");
-	private readonly clearButton = createButton("けす", "button button-secondary");
+	private readonly recognizeButton = createButton("読み取り", "button button-primary");
+	private readonly clearButton = createButton("クリア", "button button-secondary");
 	private readonly statusLabel = document.createElement("p");
 	private readonly previewText = document.createElement("pre");
 	private readonly previewMeta = document.createElement("p");
@@ -177,7 +177,7 @@ export class HandwriteSearchApp {
 		this.setStatus("起動中...");
 		this.setBusy(true);
 		try {
-			const [modelBuffer, dictionary] = await Promise.all([this.previewAssets.getModelBuffer(() => this.setStatus("よみとりの じゅんびを しています…")), this.previewAssets.getDictionary(() => this.setStatus("ことばの じゅんびを しています…"))]);
+			const [modelBuffer, dictionary] = await Promise.all([this.previewAssets.getModelBuffer(() => this.setStatus("検出の準備をしています...")), this.previewAssets.getDictionary(() => this.setStatus("言葉の準備をしています…"))]);
 			await this.previewWorker.initialize(LIVE_PREVIEW_MANIFEST, modelBuffer, dictionary);
 			this.previewReady = true;
 			this.kanaRecognizer.initialize();
