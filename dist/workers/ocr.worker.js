@@ -2648,6 +2648,8 @@ Object.defineProperty(Y.versions, "web", { value: Gr, enumerable: true });
 var PpocrRecognizer = class {
   session = null;
   dictionary = [];
+  inputHeight = 48;
+  minInputWidth = 48;
   async initialize(manifest, modelBuffer, dictionary) {
     Y.wasm.numThreads = 1;
     Y.wasm.proxy = false;
@@ -2659,6 +2661,16 @@ var PpocrRecognizer = class {
     this.session = await ts.create(modelBuffer, {
       executionProviders: ["wasm"]
     });
+    const inputMetadata = this.session.inputMetadata[0];
+    if (inputMetadata?.isTensor) {
+      const [, , modelHeight, modelWidth] = inputMetadata.shape;
+      if (typeof modelHeight === "number" && modelHeight > 0) {
+        this.inputHeight = modelHeight;
+      }
+      if (typeof modelWidth === "number" && modelWidth > 0) {
+        this.minInputWidth = modelWidth;
+      }
+    }
   }
   async recognize(imageData) {
     if (!this.session) {
@@ -2668,7 +2680,7 @@ var PpocrRecognizer = class {
     const segments = segmentIntoLines(imageData);
     const lines = [];
     for (const segment of segments) {
-      const input = preprocessForRecognition(segment.imageData);
+      const input = preprocessForRecognition(segment.imageData, this.inputHeight, this.minInputWidth);
       const tensor = new de("float32", input.data, input.dims);
       const outputs = await this.session.run({
         [this.session.inputNames[0]]: tensor
@@ -2812,10 +2824,9 @@ function createInkMask(imageData) {
   }
   return mask;
 }
-function preprocessForRecognition(imageData) {
-  const targetHeight = 32;
+function preprocessForRecognition(imageData, targetHeight, minInputWidth) {
   const aspect = imageData.width / Math.max(1, imageData.height);
-  const targetWidth = clamp(Math.ceil(targetHeight * aspect), 48, 512);
+  const targetWidth = clamp(Math.ceil(targetHeight * aspect), minInputWidth, 512);
   const inputCanvas = new OffscreenCanvas(imageData.width, imageData.height);
   const inputContext = inputCanvas.getContext("2d");
   if (!inputContext) {

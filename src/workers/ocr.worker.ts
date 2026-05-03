@@ -20,6 +20,8 @@ type WorkerMessage = InitializeMessage | RecognizeMessage;
 class PpocrRecognizer {
   private session: ort.InferenceSession | null = null;
   private dictionary: string[] = [];
+  private inputHeight = 48;
+  private minInputWidth = 48;
 
   async initialize(manifest: AppModelManifest, modelBuffer: ArrayBuffer, dictionary: string[]): Promise<void> {
     ort.env.wasm.numThreads = 1;
@@ -32,6 +34,17 @@ class PpocrRecognizer {
     this.session = await ort.InferenceSession.create(modelBuffer, {
       executionProviders: ['wasm'],
     });
+
+    const inputMetadata = this.session.inputMetadata[0];
+    if (inputMetadata?.isTensor) {
+      const [, , modelHeight, modelWidth] = inputMetadata.shape;
+      if (typeof modelHeight === 'number' && modelHeight > 0) {
+        this.inputHeight = modelHeight;
+      }
+      if (typeof modelWidth === 'number' && modelWidth > 0) {
+        this.minInputWidth = modelWidth;
+      }
+    }
   }
 
   async recognize(imageData: ImageData): Promise<OcrResult> {
@@ -44,7 +57,7 @@ class PpocrRecognizer {
     const lines: OcrLineResult[] = [];
 
     for (const segment of segments) {
-      const input = preprocessForRecognition(segment.imageData);
+      const input = preprocessForRecognition(segment.imageData, this.inputHeight, this.minInputWidth);
       const tensor = new ort.Tensor('float32', input.data, input.dims);
       const outputs = await this.session.run({
         [this.session.inputNames[0]]: tensor,
@@ -218,10 +231,13 @@ function createInkMask(imageData: ImageData): Uint8ClampedArray {
   return mask;
 }
 
-function preprocessForRecognition(imageData: ImageData): { data: Float32Array; dims: readonly [number, number, number, number] } {
-  const targetHeight = 32;
+function preprocessForRecognition(
+  imageData: ImageData,
+  targetHeight: number,
+  minInputWidth: number
+): { data: Float32Array; dims: readonly [number, number, number, number] } {
   const aspect = imageData.width / Math.max(1, imageData.height);
-  const targetWidth = clamp(Math.ceil(targetHeight * aspect), 48, 512);
+  const targetWidth = clamp(Math.ceil(targetHeight * aspect), minInputWidth, 512);
 
   const inputCanvas = new OffscreenCanvas(imageData.width, imageData.height);
   const inputContext = inputCanvas.getContext('2d');

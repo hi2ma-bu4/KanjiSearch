@@ -451,7 +451,7 @@ var HandwriteSearchApp = class {
     this.modelBadge.className = "status-pill";
     this.modelBadge.textContent = "\u30E2\u30C7\u30EB: PP-OCRv5 Chinese/Japanese (Apache-2.0)";
     this.progressLabel.className = "status-pill";
-    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T02:32:02.819Z")).toLocaleString("ja-JP")}`;
+    this.progressLabel.textContent = `Build ${(/* @__PURE__ */ new Date("2026-05-03T02:39:45.107Z")).toLocaleString("ja-JP")}`;
     strip.append(this.statusLabel, this.modelBadge, this.progressLabel);
     return strip;
   }
