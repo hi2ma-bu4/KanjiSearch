@@ -1,4 +1,4 @@
-import { normalizeForDisplay, normalizeForSearch } from "./textNormalization";
+import { normalizeForDisplay, normalizeForSearch } from "../lib/textNormalization";
 import type { JapaneseLookupAsset, LookupAnalysis, LookupKanjiEntry, LookupMixedSegment } from "./types";
 
 function isHiragana(character: string): boolean {

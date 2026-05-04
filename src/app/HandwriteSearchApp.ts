@@ -1,5 +1,6 @@
 import "../styles/app.css";
 
+import { normalizeForDisplay } from "../lib/textNormalization";
 import { AppDatabase } from "./AppDatabase";
 import { ClassifierAssetService } from "./ClassifierAssetService";
 import { HandwritingCanvas } from "./HandwritingCanvas";
@@ -9,7 +10,6 @@ import { analyzeRecognizedText } from "./LookupAnalyzer";
 import { LookupAssetService } from "./LookupAssetService";
 import { ModelAssetService } from "./ModelAssetService";
 import { OcrWorkerClient } from "./OcrWorkerClient";
-import { normalizeForDisplay } from "./textNormalization";
 import type { AppClassifierManifest, AppModelManifest, HandwrittenRecognitionResult, JapaneseLookupAsset, LookupAnalysis, LookupKanjiEntry, LookupMixedSegment, OcrLineResult, OcrResult } from "./types";
 
 const WASM_BINARY_URL = new URL("./vendor/onnxruntime/ort-wasm-simd-threaded.wasm", import.meta.url).toString();

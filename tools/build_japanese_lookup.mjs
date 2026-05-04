@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { normalizeForDisplay, normalizeForSearch } from "../src/lib/textNormalization.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,7 +14,7 @@ const EDICT2_URL = "http://ftp.edrdg.org/pub/Nihongo/edict2.gz";
 const KANJIDIC2_URL = "http://ftp.edrdg.org/pub/Nihongo/kanjidic2.xml.gz";
 
 const MAX_READING_LENGTH = 8;
-const MAX_READING_WORD_LENGTH = 4;
+const MAX_READING_WORD_LENGTH = 5;
 const MAX_MIXED_SURFACE_LENGTH = 8;
 const MAX_READING_CANDIDATES = 100;
 const MAX_WORD_READINGS = 100;
@@ -34,18 +35,6 @@ function isKana(text) {
 	return /^[\p{Script=Hiragana}\p{Script=Katakana}ーゝゞヽヾ]+$/u.test(text);
 }
 
-function toHiragana(text) {
-	return [...text]
-		.map((character) => {
-			const codePoint = character.codePointAt(0);
-			if (codePoint && codePoint >= 0x30a1 && codePoint <= 0x30f6) {
-				return String.fromCodePoint(codePoint - 0x60);
-			}
-			return character;
-		})
-		.join("");
-}
-
 function unique(values) {
 	return [...new Set(values)];
 }
@@ -54,7 +43,7 @@ function normalizeReadings(readingField) {
 	return unique(
 		readingField
 			.split(";")
-			.map((value) => toHiragana(value.trim()))
+			.map((value) => normalizeForSearch(value.trim()))
 			.filter((value) => value && isKana(value)),
 	);
 }
@@ -63,7 +52,7 @@ function normalizeSurfaces(surfaceField) {
 	return unique(
 		surfaceField
 			.split(";")
-			.map((value) => value.trim())
+			.map((value) => normalizeForDisplay(value.trim()))
 			.filter((value) => value && hasKanji(value)),
 	);
 }
@@ -126,13 +115,14 @@ function buildEdictIndexes(edictText) {
 
 		const mixedSurfaces = surfaces.filter((surface) => hasKana(surface) && countCharacters(surface) <= MAX_MIXED_SURFACE_LENGTH);
 		for (const surface of mixedSurfaces) {
-			const bucket = wordToReadings.get(surface) ?? [];
+			const searchSurface = normalizeForSearch(surface);
+			const bucket = wordToReadings.get(searchSurface) ?? [];
 			for (const reading of readings) {
 				if (!bucket.some((entry) => entry.reading === reading)) {
 					bucket.push({ reading, priority });
 				}
 			}
-			wordToReadings.set(surface, bucket);
+			wordToReadings.set(searchSurface, bucket);
 		}
 	}
 
@@ -168,13 +158,20 @@ function buildKanjiIndex(kanjidicXml) {
 			continue;
 		}
 
+		const normalizedLiteral = normalizeForSearch(literal);
+
 		const on = unique([...body.matchAll(/<reading r_type="ja_on">(.*?)<\/reading>/gu)].map((entry) => entry[1]));
 		const kun = unique([...body.matchAll(/<reading r_type="ja_kun">(.*?)<\/reading>/gu)].map((entry) => entry[1]));
 		if (on.length === 0 && kun.length === 0) {
 			continue;
 		}
 
-		kanji[literal] = { on, kun };
+		if (!kanji[normalizedLiteral]) {
+			kanji[normalizedLiteral] = { on, kun };
+		} else {
+			kanji[normalizedLiteral].on = unique([...kanji[normalizedLiteral].on, ...on]);
+			kanji[normalizedLiteral].kun = unique([...kanji[normalizedLiteral].kun, ...kun]);
+		}
 	}
 
 	return kanji;

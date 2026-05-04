@@ -1,5 +1,5 @@
+import { normalizeForDisplay, normalizeForSearch } from "../lib/textNormalization";
 import { AppDatabase } from "./AppDatabase";
-import { normalizeForDisplay, normalizeForSearch } from "./textNormalization";
 import type { CachedAssetRecord, JapaneseLookupAsset, LookupKanjiReadings } from "./types";
 
 function parseLookupAsset(text: string): JapaneseLookupAsset {

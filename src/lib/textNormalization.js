@@ -1,4 +1,4 @@
-const HALF_WIDTH_MAP: Record<string, string> = {
+const HALF_WIDTH_MAP = {
 	ｱ: "ア",
 	ｲ: "イ",
 	ｳ: "ウ",
@@ -59,7 +59,7 @@ const HALF_WIDTH_MAP: Record<string, string> = {
 	ｰ: "ー",
 };
 
-const DAKUTEN_MAP: Record<string, string> = {
+const DAKUTEN_MAP = {
 	"カ゛": "ガ",
 	"キ゛": "ギ",
 	"ク゛": "グ",
@@ -92,39 +92,67 @@ const DAKUTEN_MAP: Record<string, string> = {
 	"ヲ゛": "ヺ",
 };
 
-const SMALL_TO_LARGE_MAP: Record<string, string> = {
+const SMALL_TO_LARGE_MAP = {
 	ぁ: "あ",
 	ぃ: "い",
 	ぅ: "う",
 	ぇ: "え",
 	ぉ: "お",
+	ゕ: "か",
+	ゖ: "け",
+	"\u{1B132}": "こ",
 	っ: "つ",
 	ゃ: "や",
 	ゅ: "ゆ",
 	ょ: "よ",
 	ゎ: "わ",
+	"\u{1B150}": "ゐ",
+	"\u{1B151}": "ゑ",
+	"\u{1B152}": "を",
 	ァ: "ア",
 	ィ: "イ",
 	ゥ: "ウ",
 	ェ: "エ",
 	ォ: "オ",
+	ヵ: "カ",
+	ㇰ: "ク",
+	ヶ: "ケ",
+	"\u{1B155}": "コ",
+	ㇱ: "シ",
+	ㇲ: "ス",
 	ッ: "ツ",
+	ㇳ: "ト",
+	ㇴ: "ヌ",
+	ㇵ: "ハ",
+	ㇶ: "ヒ",
+	ㇷ: "フ",
+	ㇷ゚: "プ",
+	ㇸ: "ヘ",
+	ㇹ: "ホ",
+	ㇺ: "ム",
 	ャ: "ヤ",
 	ュ: "ユ",
 	ョ: "ヨ",
+	ㇻ: "ラ",
+	ㇼ: "リ",
+	ㇽ: "ル",
+	ㇾ: "レ",
+	ㇿ: "ロ",
 	ヮ: "ワ",
-	ヵ: "カ",
-	ヶ: "ケ",
+	"\u{1B164}": "ヰ",
+	"\u{1B165}": "ヱ",
+	"\u{1B166}": "ヲ",
+	"\u{1B167}": "ン",
 };
 
-const HISTORICAL_MAP: Record<string, string> = {
+const HISTORICAL_MAP = {
 	ゐ: "い",
 	ゑ: "え",
 	ヰ: "イ",
 	ヱ: "エ",
 };
 
-export function toFullWidthKatakana(text: string): string {
+export function toFullWidthKatakana(text) {
 	let result = "";
 	for (let i = 0; i < text.length; i++) {
 		const char = text[i];
@@ -150,7 +178,7 @@ export function toFullWidthKatakana(text: string): string {
 	return combined;
 }
 
-export function normalizeForDisplay(text: string): string {
+export function normalizeForDisplay(text) {
 	let normalized = toFullWidthKatakana(text);
 
 	return [...normalized]
@@ -163,7 +191,7 @@ export function normalizeForDisplay(text: string): string {
 		.join("");
 }
 
-export function normalizeForSearch(text: string): string {
+export function normalizeForSearch(text) {
 	let normalized = normalizeForDisplay(text);
 
 	// Convert Katakana to Hiragana
@@ -178,7 +206,7 @@ export function normalizeForSearch(text: string): string {
 		.join("");
 
 	// Specific search mergers
-	const searchMap: Record<string, string> = {
+	const searchMap = {
 		ぢ: "じ",
 		づ: "ず",
 		ヶ: "け",
