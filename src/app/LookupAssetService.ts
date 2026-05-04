@@ -1,6 +1,6 @@
 import { AppDatabase } from "./AppDatabase";
-import { normalizeForSearch } from "./textNormalization";
-import type { CachedAssetRecord, JapaneseLookupAsset } from "./types";
+import { normalizeForDisplay, normalizeForSearch } from "./textNormalization";
+import type { CachedAssetRecord, JapaneseLookupAsset, LookupKanjiReadings } from "./types";
 
 function parseLookupAsset(text: string): JapaneseLookupAsset {
 	const parsed = JSON.parse(text) as Partial<JapaneseLookupAsset>;
@@ -14,16 +14,40 @@ function parseLookupAsset(text: string): JapaneseLookupAsset {
 
 	const readingToWords: Record<string, string[]> = {};
 	for (const [reading, words] of Object.entries(parsed.readingToWords)) {
-		const normalized = normalizeForSearch(reading);
-		if (!readingToWords[normalized]) {
-			readingToWords[normalized] = [];
+		const normalizedReading = normalizeForSearch(reading);
+		if (!readingToWords[normalizedReading]) {
+			readingToWords[normalizedReading] = [];
 		}
-		readingToWords[normalized].push(...words);
+		const normalizedWords = words.map((w) => normalizeForDisplay(w));
+		readingToWords[normalizedReading].push(...normalizedWords);
 	}
 
-	// De-duplicate words for each reading
 	for (const reading of Object.keys(readingToWords)) {
 		readingToWords[reading] = [...new Set(readingToWords[reading])];
+	}
+
+	const wordToReadings: Record<string, string[]> = {};
+	for (const [word, readings] of Object.entries(parsed.wordToReadings)) {
+		const normalizedWord = normalizeForSearch(word);
+		if (!wordToReadings[normalizedWord]) {
+			wordToReadings[normalizedWord] = [];
+		}
+		wordToReadings[normalizedWord].push(...readings);
+	}
+
+	for (const word of Object.keys(wordToReadings)) {
+		wordToReadings[word] = [...new Set(wordToReadings[word])];
+	}
+
+	const kanji: Record<string, LookupKanjiReadings> = {};
+	for (const [k, readings] of Object.entries(parsed.kanji)) {
+		const normalizedKanji = normalizeForSearch(k);
+		if (!kanji[normalizedKanji]) {
+			kanji[normalizedKanji] = readings;
+		} else {
+			kanji[normalizedKanji].on = [...new Set([...kanji[normalizedKanji].on, ...readings.on])];
+			kanji[normalizedKanji].kun = [...new Set([...kanji[normalizedKanji].kun, ...readings.kun])];
+		}
 	}
 
 	return {
@@ -32,8 +56,8 @@ function parseLookupAsset(text: string): JapaneseLookupAsset {
 			sources: [],
 		},
 		readingToWords,
-		wordToReadings: parsed.wordToReadings,
-		kanji: parsed.kanji,
+		wordToReadings,
+		kanji,
 	};
 }
 

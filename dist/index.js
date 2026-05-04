@@ -1049,14 +1049,36 @@ function parseLookupAsset(text) {
   }
   const readingToWords = {};
   for (const [reading, words] of Object.entries(parsed.readingToWords)) {
-    const normalized = normalizeForSearch(reading);
-    if (!readingToWords[normalized]) {
-      readingToWords[normalized] = [];
+    const normalizedReading = normalizeForSearch(reading);
+    if (!readingToWords[normalizedReading]) {
+      readingToWords[normalizedReading] = [];
     }
-    readingToWords[normalized].push(...words);
+    const normalizedWords = words.map((w) => normalizeForDisplay(w));
+    readingToWords[normalizedReading].push(...normalizedWords);
   }
   for (const reading of Object.keys(readingToWords)) {
     readingToWords[reading] = [...new Set(readingToWords[reading])];
+  }
+  const wordToReadings = {};
+  for (const [word, readings] of Object.entries(parsed.wordToReadings)) {
+    const normalizedWord = normalizeForSearch(word);
+    if (!wordToReadings[normalizedWord]) {
+      wordToReadings[normalizedWord] = [];
+    }
+    wordToReadings[normalizedWord].push(...readings);
+  }
+  for (const word of Object.keys(wordToReadings)) {
+    wordToReadings[word] = [...new Set(wordToReadings[word])];
+  }
+  const kanji = {};
+  for (const [k, readings] of Object.entries(parsed.kanji)) {
+    const normalizedKanji = normalizeForSearch(k);
+    if (!kanji[normalizedKanji]) {
+      kanji[normalizedKanji] = readings;
+    } else {
+      kanji[normalizedKanji].on = [.../* @__PURE__ */ new Set([...kanji[normalizedKanji].on, ...readings.on])];
+      kanji[normalizedKanji].kun = [.../* @__PURE__ */ new Set([...kanji[normalizedKanji].kun, ...readings.kun])];
+    }
   }
   return {
     metadata: parsed.metadata ?? {
@@ -1064,8 +1086,8 @@ function parseLookupAsset(text) {
       sources: []
     },
     readingToWords,
-    wordToReadings: parsed.wordToReadings,
-    kanji: parsed.kanji
+    wordToReadings,
+    kanji
   };
 }
 var LookupAssetService = class {
